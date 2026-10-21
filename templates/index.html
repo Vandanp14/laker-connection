@@ -20,7 +20,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
-    <div class="app">
+    <div class="app app-wide">
         <header class="topbar">
             <div class="topbar-title">
                 <span class="topbar-mark">●</span>
@@ -72,7 +72,8 @@
             </a>
         </nav>
 
-        <div class="grid-top">
+        <div class="dash-grid">
+        <div class="dash-main">
             <section class="card">
                 <div class="card-header">
                     <h2>Log a check-in</h2>
@@ -245,40 +246,6 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
                 </details>
             </section>
 
-            <section class="card">
-                <h2>Progress this semester</h2>
-                {% if progress %}
-                <div class="progress-list">
-                    {% for p in progress %}
-                        <div class="progress-row">
-                            <a class="progress-name" href="{{ url_for('history', resident=p.email_or_id) }}">{{ p.full_name }}</a>
-                            {% if config.valid_reasons %}
-                            <div class="progress-tiles">
-                                {% for reason in config.valid_reasons %}
-                                    {% if reason in p.reasons_done %}
-                                        <a class="reason-tile reason-done" href="{{ url_for('history', status='submitted', resident=p.email_or_id, reason=reason) }}" aria-label="{{ reason }} — submitted; view in History" title="{{ reason }} — submitted">{{ loop.index }}</a>
-                                    {% else %}
-                                        <span class="reason-tile" aria-label="{{ reason }} — not yet submitted" title="{{ reason }} — not yet submitted">{{ loop.index }}</span>
-                                    {% endif %}
-                                {% endfor %}
-                            </div>
-                            {% if p.unassigned_submissions %}
-                                <span class="pill pill-warning" title="Submitted appointment{{ 's' if p.unassigned_submissions != 1 else '' }} with no saved reason">{{ p.unassigned_submissions }} reason missing</span>
-                            {% endif %}
-                            {% else %}
-                            <div class="progress-count">{{ p.submitted }}/{{ p.target }}</div>
-                            {% endif %}
-                            <span class="pill progress-status {{ 'pill-positive' if p.done_this_month else 'pill-muted' }}">
-                                {{ 'Done this month' if p.done_this_month else 'Not yet' }}
-                            </span>
-                        </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="empty">No residents on the roster yet.</p>
-                {% endif %}
-            </section>
-        </div>
 
         <section class="card card-queue">
             <div class="card-header">
@@ -384,6 +351,55 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
                 </form>
             {% endif %}
         </section>
+        </div>
+
+        <aside class="dash-sidebar">
+            <section class="card">
+                {% macro progress_row(p) %}
+                        <div class="progress-row">
+                            <a class="progress-name" href="{{ url_for('history', resident=p.email_or_id) }}">{{ p.full_name }}</a>
+                            {% if config.valid_reasons %}
+                            <div class="progress-tiles">
+                                {% for reason in config.valid_reasons %}
+                                    {% if reason in p.reasons_done %}
+                                        <a class="reason-tile reason-done" href="{{ url_for('history', status='submitted', resident=p.email_or_id, reason=reason) }}" aria-label="{{ reason }} — submitted; view in History" title="{{ reason }} — submitted">{{ loop.index }}</a>
+                                    {% else %}
+                                        <span class="reason-tile" aria-label="{{ reason }} — not yet submitted" title="{{ reason }} — not yet submitted">{{ loop.index }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% if p.unassigned_submissions %}
+                                <span class="pill pill-warning" title="Submitted appointment{{ 's' if p.unassigned_submissions != 1 else '' }} with no saved reason">{{ p.unassigned_submissions }} reason missing</span>
+                            {% endif %}
+                            {% else %}
+                            <div class="progress-count">{{ p.submitted }}/{{ p.target }}</div>
+                            {% endif %}
+                        </div>
+                {% endmacro %}
+                {% if progress %}
+                {% set left = progress|rejectattr('done_this_month')|list %}
+                {% set done = progress|selectattr('done_this_month')|list %}
+                <h2>Left this month ({{ left|length }})</h2>
+                {% if left %}
+                <div class="progress-list">
+                    {% for p in left %}{{ progress_row(p) }}{% endfor %}
+                </div>
+                {% else %}
+                <p class="empty">Everyone's done for this month.</p>
+                {% endif %}
+                {% if done %}
+                <h3 class="progress-subhead">Done this month ({{ done|length }})</h3>
+                <div class="progress-list progress-list-done">
+                    {% for p in done %}{{ progress_row(p) }}{% endfor %}
+                </div>
+                {% endif %}
+                {% else %}
+                <h2>Left this month</h2>
+                <p class="empty">No residents on the roster yet.</p>
+                {% endif %}
+            </section>
+        </aside>
+        </div>
         {% if build_info %}
         <footer class="app-footer">Laker Connection · {{ build_info }}</footer>
         {% endif %}

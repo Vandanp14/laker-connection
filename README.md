@@ -126,6 +126,8 @@ To back up, copy that folder somewhere safe. Updates never change it.
 
 Screenshots of failed rows are saved in `~/LakerConnection/data/logs/failures/`.
 
+Every run also writes a log file to `~/LakerConnection/data/logs/runs/` (the newest 20 are kept). If something goes wrong, send the newest `run-….log` file to the person who shared this tool. It shows what happened and the exact error.
+
 ## Updating
 
 Updates are automatic. Each time you double-click Laker Connection, it gets the latest version first.

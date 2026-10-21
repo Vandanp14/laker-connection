@@ -603,3 +603,110 @@ def test_footer_shows_build_info(isolated_dashboard):
         assert b'Laker Connection \xc2\xb7' not in client.get('/').data
         (isolated_dashboard / 'BUILD_INFO').write_text('a1b2c3d · 2026-10-25\n')
         assert 'Laker Connection · a1b2c3d · 2026-10-25'.encode() in client.get('/').data
+
+
+def test_server_error_is_logged_with_traceback(isolated_dashboard, monkeypatch, caplog):
+    def boom(path):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(dashboard.data, 'load_residents', boom)
+    with caplog.at_level('ERROR', logger='laker'):
+        with dashboard.app.test_client() as client:
+            assert client.get('/').status_code == 500
+    record = next(r for r in caplog.records if r.name == 'laker')
+    assert "Couldn't load data" in record.getMessage()
+    assert record.exc_info and 'disk on fire' in str(record.exc_info[1])
+
+
+def test_submit_outcomes_are_logged(sn_dashboard, caplog):
+    with caplog.at_level('INFO', logger='laker'):
+        _post({'speednotes': ['Room Selection']})
+    messages = [r.getMessage() for r in caplog.records if r.name == 'laker']
+    assert any('dry run' in m and '1 row' in m for m in messages)
+    assert any('SUBMITTED' in m and 'jdoe@oswego.edu' in m for m in messages)
+
+
+def test_sidebar_lists_left_this_month_before_done(isolated_dashboard):
+    from datetime import datetime
+    this_month = datetime.now().strftime('%m-01-%Y')
+    (isolated_dashboard / 'residents.csv').write_text(
+        "full_name,email_or_id\nJane Doe,jdoe@oswego.edu\nBob Jones,bjones@oswego.edu\n")
+    (isolated_dashboard / 'submission_log.csv').write_text(
+        "email_or_id,date,start_time,reason,submitted_at\n"
+        f"jdoe@oswego.edu,{this_month},09:00,Laker Connection #1 > FALL,2026-01-01T00:00:00\n")
+    with dashboard.app.test_client() as client:
+        page = client.get('/').data.decode()
+    left, done = page.index('Left this month (1)'), page.index('Done this month (1)')
+    assert left < page.index('Bob Jones', left) < done < page.index('Jane Doe', done)
+    # the sidebar comes after the queue in the page's column layout wrapper
+    assert page.index('class="dash-sidebar"') > page.index('Ready to submit')
+
+
+def test_sidebar_everyone_done(isolated_dashboard):
+    from datetime import datetime
+    this_month = datetime.now().strftime('%m-01-%Y')
+    (isolated_dashboard / 'submission_log.csv').write_text(
+        "email_or_id,date,start_time,reason,submitted_at\n"
+        f"jdoe@oswego.edu,{this_month},09:00,Laker Connection #1 > FALL,2026-01-01T00:00:00\n")
+    with dashboard.app.test_client() as client:
+        assert b"Everyone's done for this month." in client.get('/').data
+
+
+class FakeAnalytics:
+    def __init__(self):
+        self.calls = []
+
+    def track(self, event, **counts):
+        self.calls.append((event, counts))
+
+
+def _outcome_rows(rows, outcomes):
+    template = rows[0]
+    return [{**template, 'outcome': o, 'error': None} for o in outcomes]
+
+
+def test_real_submit_tracked_with_counts(sn_dashboard, monkeypatch):
+    fake = FakeAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+    O = dashboard.browser.SubmitOutcome
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return (_outcome_rows(rows, [O.SUBMITTED, O.SUBMITTED]),
+                _outcome_rows(rows, [O.NOT_FOUND, O.AMBIGUOUS, O.SUBMIT_FAILED,
+                                     O.SUBMIT_UNCERTAIN, O.NOT_ATTEMPTED]))
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    assert len(fake.calls) == 1
+    event, counts = fake.calls[0]
+    seconds = counts.pop('seconds')
+    assert event == 'submit' and isinstance(seconds, int) and seconds >= 0
+    assert counts == {'submitted': 2, 'failed': 3, 'uncertain': 1, 'skipped': 1, 'crashed': 0}
+
+
+def test_dry_run_not_tracked(sn_dashboard, monkeypatch):
+    fake = FakeAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+    _post({'speednotes': ['Room Selection']})
+    assert fake.calls == []
+
+
+def test_crashed_batch_tracked(sn_dashboard, monkeypatch):
+    fake = FakeAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+
+    async def boom(rows, reason, config, dry_run=False):
+        raise RuntimeError("chrome went away")
+    monkeypatch.setattr(dashboard.browser, 'run_submission', boom)
+    response = _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    assert response.status_code == 500 and b'Submission error' in response.data
+    assert len(fake.calls) == 1
+    event, counts = fake.calls[0]
+    counts.pop('seconds')
+    assert event == 'submit'
+    assert counts == {'submitted': 0, 'failed': 0, 'uncertain': 0, 'skipped': 1, 'crashed': 1}
+
+
+def test_no_analytics_module_is_harmless(sn_dashboard, monkeypatch):
+    monkeypatch.setattr(dashboard, 'analytics', None, raising=False)
+    response = _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    assert response.status_code == 200
+    assert sn_dashboard['calls'] == 1

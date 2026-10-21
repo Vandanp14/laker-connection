@@ -36,3 +36,8 @@ logs/probe/
 
 # Local agent scratch (holds a real-name denylist)
 .superpowers/
+
+# Analytics install ID / off switch (public app only)
+.install_id
+no-analytics
+scripts/analytics/.clasp.json

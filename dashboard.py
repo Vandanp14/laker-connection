@@ -2,8 +2,10 @@ from flask import Flask, render_template, request, redirect, url_for, send_from_
 import asyncio
 from datetime import datetime
 import hashlib
+import logging
 import os
 import csv
+import time
 from typing import Dict
 
 import data
@@ -12,7 +14,14 @@ import csv_import
 import datadir
 import paths
 
+try:
+    import analytics  # only present in the public app (see public_only/)
+except ImportError:
+    analytics = None
+
 app = Flask(__name__)
+# Goes to stderr, which launch.sh tees into logs/runs/run-<time>.log.
+log = logging.getLogger('laker')
 app.config['MAX_CONTENT_LENGTH'] = 1_000_000  # uploads: a roster/check-in CSV is a few KB
 
 # DASH_ROOT holds the user's data files (follows LAKER_DATA_DIR); APP_ROOT
@@ -62,6 +71,9 @@ def _note_digest(notes: str) -> str:
 
 
 def _error_page(message: str, details=None, status: int = 400):
+    if status >= 500:
+        # Called from inside an except block: keep the traceback for the run log.
+        log.error(message, exc_info=True)
     return render_template('error.html', message=message, details=details or []), status
 
 
@@ -654,6 +666,7 @@ def submit_batch():
                 return _error_page("Couldn't submit", sn_errors)
 
         # Run the submission asynchronously
+        started = time.monotonic()
         try:
             # Since Flask is sync by default, run async code in a new event loop
             loop = asyncio.new_event_loop()
@@ -663,7 +676,28 @@ def submit_batch():
             )
             loop.close()
         except Exception as e:
+            if analytics and not dry_run:
+                analytics.track('submit', submitted=0, failed=0, uncertain=0,
+                                skipped=len(rows_to_submit), crashed=1,
+                                seconds=round(time.monotonic() - started))
             return _error_page(f"Submission error: {e}", status=500)
+        if analytics and not dry_run:
+            O = browser.SubmitOutcome
+            outcomes = [f['outcome'] for f in failed]
+            analytics.track('submit', submitted=len(submitted),
+                            failed=sum(o in (O.NOT_FOUND, O.AMBIGUOUS, O.SUBMIT_FAILED)
+                                       for o in outcomes),
+                            uncertain=outcomes.count(O.SUBMIT_UNCERTAIN),
+                            skipped=outcomes.count(O.NOT_ATTEMPTED),
+                            crashed=0, seconds=round(time.monotonic() - started))
+
+        log.info("%s: %d row(s), reason %r", 'dry run' if dry_run else 'real submit',
+                 len(rows_to_submit), run_reason)
+        for r in submitted:
+            log.info("  SUBMITTED %s %s %s", r['email_or_id'], r['date'], r['start_time'])
+        for f in failed:
+            log.warning("  %s %s %s %s: %s", f['outcome'], f['email_or_id'], f['date'],
+                        f['start_time'], f.get('error'))
 
         # For success, append to submission_log (only if not dry run)
         if not dry_run:
@@ -833,10 +867,14 @@ if __name__ == '__main__':
     except RuntimeError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
+    if analytics:
+        analytics.on_launch()
     # Debug mode (auto-reload, in-browser tracebacks) only when asked for:
     # LAKER_DEBUG=1 python3 dashboard.py
     # Port 5000 collides with macOS's AirPlay Receiver, which squats on it by
     # default — 5050 avoids that without asking you to change a Mac setting.
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
     debug = os.environ.get('LAKER_DEBUG') == '1'
     if not debug:
         # Friends see this Terminal window: hide Flask's per-request log and its
@@ -845,4 +883,6 @@ if __name__ == '__main__':
         import flask.cli
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
         flask.cli.show_server_banner = lambda *args, **kwargs: None
-    app.run(debug=debug, port=int(os.environ.get('LAKER_PORT', '5050')))
+    port = int(os.environ.get('LAKER_PORT', '5050'))
+    log.info("Dashboard on port %d (data: %s)", port, DASH_ROOT)
+    app.run(debug=debug, port=port)

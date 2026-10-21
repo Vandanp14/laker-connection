@@ -94,3 +94,50 @@ def test_launch_refuses_foreign_process_on_cdp_port(tmp_path, server):
     assert result.returncode == 1
     assert f"port {cdp_port}" in result.stdout + result.stderr
     assert opened == ""
+
+
+def _run_logs(tmp_path):
+    runs = tmp_path / "LakerConnection" / "data" / "logs" / "runs"
+    return sorted(runs.glob("run-*.log")) if runs.exists() else []
+
+
+def test_launch_writes_run_log(tmp_path, server):
+    port, set_page = server
+    set_page("<title>Something else</title>")
+    _run(tmp_path, port)
+    logs = _run_logs(tmp_path)
+    assert len(logs) == 1
+    text = logs[0].read_text()
+    assert f"Another app is using port {port}" in text
+    assert text[:4].isdigit()  # timestamped lines
+
+
+def test_launch_keeps_last_20_run_logs(tmp_path, server):
+    port, set_page = server
+    set_page("<title>Something else</title>")
+    runs = tmp_path / "LakerConnection" / "data" / "logs" / "runs"
+    runs.mkdir(parents=True)
+    for i in range(25):
+        old = runs / f"run-20260101-0000{i:02d}.log"
+        old.write_text("old")
+        os.utime(old, (1_700_000_000 + i, 1_700_000_000 + i))
+    _run(tmp_path, port)
+    logs = _run_logs(tmp_path)
+    assert len(logs) == 20
+    assert not (runs / "run-20260101-000000.log").exists()
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(ROOT, "run.sh")),
+                    reason="run.sh is the private dev launcher; not in the public repo")
+def test_run_sh_uses_repo_code_and_data(tmp_path, server):
+    """run.sh = launch.sh pointed at this checkout: repo code, repo data, system python."""
+    port, set_page = server
+    set_page("<title>Something else</title>")
+    data_dir = tmp_path / "devdata"
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "LAKER_PORT": str(port),
+           "LAKER_DATA_DIR": str(data_dir)}
+    result = subprocess.run(["/bin/bash", os.path.join(ROOT, "run.sh")], env=env,
+                            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+    assert result.returncode == 1
+    assert f"port {port}" in result.stdout + result.stderr
+    assert list((data_dir / "logs" / "runs").glob("run-*.log"))

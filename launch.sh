@@ -8,21 +8,46 @@
 # your everyday Chrome is running (checked 2026-10-21, Chrome 155) — so
 # nobody has to quit Chrome first. The separate user-data-dir means it never
 # touches your normal profiles, tabs, or history.
+#
+# Each run writes logs/runs/run-<time>.log (launcher + dashboard output,
+# errors with tracebacks, each submitted row's outcome) and
+# logs/runs/chrome-<time>.log (Chrome's own noisy output) under the data
+# folder; the newest 20 of each are kept.
+#
+# Overrides (run.sh uses these to run a dev checkout in place):
+#   LAKER_APP_DIR  code folder        (default ~/LakerConnection/app)
+#   LAKER_PYTHON   python to use      (default ~/LakerConnection/.venv)
+#   LAKER_DATA_DIR data folder        (default ~/LakerConnection/data)
+#   LAKER_SKIP_LOGIN_PROMPT=1         don't ask to log into Starfish first
 set -uo pipefail
 
 LAKER_HOME="${LAKER_HOME:-$HOME/LakerConnection}"
-APP="$LAKER_HOME/app"
-PY="$LAKER_HOME/.venv/bin/python"
-export LAKER_DATA_DIR="$LAKER_HOME/data"
+APP="${LAKER_APP_DIR:-$LAKER_HOME/app}"
+PY="${LAKER_PYTHON:-$LAKER_HOME/.venv/bin/python}"
+export LAKER_DATA_DIR="${LAKER_DATA_DIR:-$LAKER_HOME/data}"
 PORT="${LAKER_PORT:-5050}"
 CHROME_DATA_DIR="$HOME/laker-chrome-automation"
 DASHBOARD_URL="http://127.0.0.1:$PORT"
 
+LOG_DIR="$LAKER_DATA_DIR/logs/runs"
+RUN_STAMP="$(date +%Y%m%d-%H%M%S)"
+RUN_LOG="$LOG_DIR/run-$RUN_STAMP.log"
+CHROME_LOG="$LOG_DIR/chrome-$RUN_STAMP.log"
+mkdir -p "$LOG_DIR"
+# Keep 19 old ones; this run adds the 20th.
+for kind in run chrome; do
+    # shellcheck disable=SC2012  # names are ours: no spaces/newlines
+    ls -1t "$LOG_DIR"/"$kind"-*.log 2>/dev/null | tail -n +20 | while IFS= read -r old; do rm -f "$old"; done
+done
+
 release_lock() { if [ -n "${LAKER_LOCK:-}" ]; then rm -rf "$LAKER_LOCK"; fi; }
 trap release_lock EXIT
 
-say() { printf '==> %s\n' "$1"; }
-fail() { printf '\n%s\n' "$1" >&2; exit 1; }
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$RUN_LOG"; }
+say() { printf '==> %s\n' "$1"; log "$1"; }
+fail() { printf '\n%s\n' "$1" >&2; log "ERROR: $1"; exit 1; }
+
+log "Laker Connection starting (app: $APP, data: $LAKER_DATA_DIR)"
 
 port_open() { curl -s -o /dev/null -m 2 "$1"; }
 
@@ -85,8 +110,14 @@ if port_open "http://127.0.0.1:$CDP_PORT/json/version"; then
 else
     say "Opening the automation Chrome window…"
     APPOINTMENTS_URL="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["appointments_url"])' "$APP/config.json")"
-    open -na "Google Chrome" --args \
+    # The three --disable-*background* flags stop Chrome from slowing down
+    # the automation window when it's behind other windows — a stalled,
+    # throttled tab can make a submission hang until something wakes it.
+    open -na "Google Chrome" --stdout "$CHROME_LOG" --stderr "$CHROME_LOG" --args \
         --remote-debugging-port="$CDP_PORT" \
+        --disable-background-timer-throttling \
+        --disable-backgrounding-occluded-windows \
+        --disable-renderer-backgrounding \
         --user-data-dir="$CHROME_DATA_DIR" \
         --profile-directory="LakerConnection" \
         --no-first-run \
@@ -103,7 +134,7 @@ fi
 # --- First-time Starfish login ---------------------------------------------------------
 LOGIN_MARKER="$LAKER_DATA_DIR/.logged_in_once"
 mkdir -p "$LAKER_DATA_DIR"
-if [ ! -f "$LOGIN_MARKER" ]; then
+if [ ! -f "$LOGIN_MARKER" ] && [ "${LAKER_SKIP_LOGIN_PROMPT:-}" != "1" ]; then
     echo
     echo "First time: log into Starfish in the Chrome window that just opened"
     echo "(including the Duo/second step). When you see your calendar, come back"
@@ -116,7 +147,8 @@ fi
 
 # --- Dashboard ---------------------------------------------------------------------------
 say "Starting the dashboard…"
-LAKER_PORT="$PORT" "$PY" "$APP/dashboard.py" &
+# Output shows here and is copied into the run log.
+LAKER_PORT="$PORT" PYTHONUNBUFFERED=1 "$PY" "$APP/dashboard.py" > >(tee -a "$RUN_LOG") 2>&1 &
 DASHBOARD_PID=$!
 for _ in $(seq 1 30); do
     port_open "$DASHBOARD_URL" && break
@@ -129,5 +161,6 @@ release_lock
 open "$DASHBOARD_URL"
 echo
 echo "Laker Connection is running at $DASHBOARD_URL"
+echo "Log for this run: $RUN_LOG"
 echo "Keep this window open. Close it (or press Ctrl+C) when you're done."
 wait "$DASHBOARD_PID"
