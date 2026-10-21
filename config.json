@@ -1,0 +1,63 @@
+{
+  "slot_duration_minutes": 15,
+  "cdp_url": "http://localhost:9222",
+  "appointments_url": "https://oswego.starfishsolutions.com/starfish-ops/appointments/appointments.html",
+  "logged_in_indicator": ".nav-user-name",
+  "valid_locations": [
+    "In- Residence Halls",
+    "Out of Residence Halls"
+  ],
+  "default_location": "In- Residence Halls",
+  "valid_reasons": [
+    "Laker Connection #1 > FALL",
+    "Laker Connection #2 > FALL",
+    "Laker Connection #3 > FALL"
+  ],
+  "speednote_groups": [
+    {
+      "name": "Academics",
+      "topics": [
+        "Academics - Concern/Support Needed",
+        "Academics - Kudos/Check-In"
+      ]
+    },
+    {
+      "name": "Wellbeing",
+      "topics": [
+        "Wellbeing - Concern/Support Needed",
+        "Wellbeing - Kudos/Check-in",
+        "Transition/Adjustment",
+        "Personal Relationships"
+      ]
+    },
+    {
+      "name": "Roommates",
+      "topics": [
+        "Roommate Agreement Review",
+        "Roommate Relationship"
+      ]
+    },
+    {
+      "name": "Housing",
+      "topics": [
+        "Room Selection",
+        "Facilities Concern",
+        "Break Plans"
+      ]
+    },
+    {
+      "name": "Referrals",
+      "topics": [
+        "Refer to other office or service",
+        "Referred to Residence Hall Director"
+      ]
+    },
+    {
+      "name": "Other",
+      "topics": [
+        "Campus Involvement",
+        "Financial/Employment Concerns"
+      ]
+    }
+  ]
+}

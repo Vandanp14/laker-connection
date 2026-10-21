@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+{% macro speednote_chips(groups, field_name, checked=()) -%}
+<div class="topic-groups">
+    {% for group in groups %}
+    <span class="topic-group-name">{{ group.name }}</span>
+    <div class="topic-chips">
+        {% for topic in group.topics %}
+        <label class="chip"><input type="checkbox" name="{{ field_name }}" value="{{ topic }}"{% if topic in checked %} checked{% endif %}>{{ topic }}</label>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{%- endmacro %}
+{% set sn_groups = config.speednote_groups or [] %}
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Laker Connection Dashboard</title>
+    <link rel="stylesheet" href="/static/main.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-title">
+                <span class="topbar-mark">●</span>
+                <h1>Laker Connection</h1>
+            </div>
+            <div class="topbar-right">
+                <nav class="topbar-nav">
+                    <a href="{{ url_for('history') }}">History</a>
+                    <a href="{{ url_for('settings') }}">Settings</a>
+                </nav>
+                <div class="topbar-meta">{{ current_datetime }}</div>
+            </div>
+        </header>
+
+        {% if import_notice %}
+        <div class="banner banner-success">
+            <div class="banner-title">{{ import_notice }}</div>
+        </div>
+        {% endif %}
+
+        {% if errors %}
+        <div class="banner banner-error">
+            <div class="banner-title">{{ errors|length }} issue{{ 's' if errors|length != 1 else '' }} to fix</div>
+            <ul>
+                {% for error in errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <nav class="connection-rail" aria-label="Check-in status">
+            <a class="connection-stage" href="{{ url_for('history', status='all') }}" data-status="recorded">
+                <span class="connection-label">Recorded</span>
+                <strong class="connection-value">{{ status_counts.recorded }}</strong>
+                <span class="connection-action">View all</span>
+            </a>
+            <span class="connection-line" aria-hidden="true"></span>
+            <a class="connection-stage connection-stage-ready" href="{{ url_for('history', status='pending') }}" data-status="pending">
+                <span class="connection-label">Ready for Starfish</span>
+                <strong class="connection-value">{{ status_counts.pending }}</strong>
+                <span class="connection-action">Review queue</span>
+            </a>
+            <span class="connection-line" aria-hidden="true"></span>
+            <a class="connection-stage connection-stage-done" href="{{ url_for('history', status='submitted') }}" data-status="submitted">
+                <span class="connection-label">Submitted</span>
+                <strong class="connection-value">{{ status_counts.submitted }}</strong>
+                <span class="connection-action">Open history</span>
+            </a>
+        </nav>
+
+        <div class="grid-top">
+            <section class="card">
+                <div class="card-header">
+                    <h2>Log a check-in</h2>
+                    <div class="segmented" role="tablist">
+                        <button type="button" role="tab" aria-selected="true" data-tab="quick">Quick</button>
+                        <button type="button" role="tab" aria-selected="false" data-tab="batch">Same-day batch</button>
+                        <button type="button" role="tab" aria-selected="false" data-tab="bulk">Bulk paste</button>
+                    </div>
+                </div>
+
+                <div class="tab-panel" data-panel="quick">
+                    <form method="post" action="{{ url_for('add_checkin') }}">
+                        <div class="form-row">
+                            <div class="form-field">
+                                <label for="full_name">Resident</label>
+                                <select name="full_name" id="full_name">
+                                    <option value="" disabled selected>Select resident</option>
+                                    {% for resident in residents %}
+                                        <option value="{{ resident.name }}">{{ resident.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label for="date">Date</label>
+                                <input type="date" name="date" id="date" required>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-field">
+                                <label for="start_time">Start time (blank = auto-chain +{{ config.slot_duration_minutes }}m)</label>
+                                <input type="text" name="start_time" id="start_time" pattern="[0-9]{2}:[0-9]{2}" placeholder="14:15" maxlength="5">
+                            </div>
+                            <div class="form-field">
+                                <label for="location">Location</label>
+                                <select name="location" id="location">
+                                    <option value="" disabled selected>Select location</option>
+                                    {% if config.valid_locations %}
+                                        {% for loc in config.valid_locations %}
+                                            <option value="{{ loc }}">{{ loc }}</option>
+                                        {% endfor %}
+                                    {% endif %}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-field">
+                            <label for="notes">Notes</label>
+                            <textarea name="notes" id="notes" rows="3"></textarea>
+                        </div>
+
+                        <button class="btn-primary" type="submit">Add check-in</button>
+                    </form>
+                </div>
+
+                <div class="tab-panel" data-panel="batch" hidden>
+                    <p class="hint">
+                        For a run of back-to-back conversations on one day. Check off everyone you
+                        talked to — only the first one needs a start time, the rest auto-chain
+                        +{{ config.slot_duration_minutes }}m each.
+                    </p>
+                    <form method="post" action="{{ url_for('add_checkins_batch') }}">
+                        <div class="form-row">
+                            <div class="form-field">
+                                <label for="batch_date">Date</label>
+                                <input type="date" name="date" id="batch_date" required>
+                            </div>
+                            <div class="form-field">
+                                <label for="first_start_time">First start time</label>
+                                <input type="text" name="first_start_time" id="first_start_time" pattern="[0-9]{2}:[0-9]{2}" placeholder="13:00" maxlength="5" required>
+                            </div>
+                        </div>
+                        <div class="form-field">
+                            <label for="batch_location">Location (applies to everyone)</label>
+                            <select name="location" id="batch_location">
+                                <option value="" disabled selected>Select location</option>
+                                {% if config.valid_locations %}
+                                    {% for loc in config.valid_locations %}
+                                        <option value="{{ loc }}">{{ loc }}</option>
+                                    {% endfor %}
+                                {% endif %}
+                            </select>
+                        </div>
+
+                        {% if residents %}
+                        <div class="roster-list">
+                            {% for resident in residents %}
+                                <label class="roster-row">
+                                    <input type="checkbox" name="checked_{{ resident.id }}">
+                                    <span class="roster-name">{{ resident.name }}</span>
+                                    <input type="text" class="roster-notes" name="notes_{{ resident.id }}" placeholder="What did you talk about?">
+                                </label>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="empty">No residents on the roster yet — add one below first.</p>
+                        {% endif %}
+
+                        <button class="btn-primary" type="submit">Log these check-ins</button>
+                    </form>
+                </div>
+
+                <div class="tab-panel" data-panel="bulk" hidden>
+                    <p class="hint">
+                        Catching up on a backlog? One line per check-in:
+                        <code>Name | MM-DD-YYYY | HH:MM or blank | notes</code>.
+                        Nothing is saved unless every line is valid.
+                    </p>
+                    <form method="post" action="{{ url_for('add_checkins_bulk') }}">
+                        <div class="form-field">
+                            <label for="bulk_location">Location (applies to every line)</label>
+                            <select name="location" id="bulk_location">
+                                <option value="" disabled selected>Select location</option>
+                                {% if config.valid_locations %}
+                                    {% for loc in config.valid_locations %}
+                                        <option value="{{ loc }}">{{ loc }}</option>
+                                    {% endfor %}
+                                {% endif %}
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label for="bulk_text">Check-ins</label>
+                            <textarea name="bulk_text" id="bulk_text" rows="8" placeholder="Jane Doe | 10-01-2026 | 14:00 | talked about classes
+John Smith | 10-02-2026 | 09:00 | discussed roommate issue
+Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
+                        </div>
+                        <button class="btn-primary" type="submit">Add all</button>
+                    </form>
+                </div>
+
+                <details class="roster-manage">
+                    <summary>Manage roster ({{ residents|length }})</summary>
+                    <form class="add-resident-form" method="post" action="{{ url_for('add_resident') }}">
+                        <div class="form-field">
+                            <label for="new_full_name">Full name</label>
+                            <input type="text" name="full_name" id="new_full_name" required placeholder="Jane Smith">
+                        </div>
+                        <div class="form-field">
+                            <label for="new_email_or_id">Email / ID</label>
+                            <input type="text" name="email_or_id" id="new_email_or_id" required placeholder="jsmith@oswego.edu">
+                        </div>
+                        <button class="btn-secondary" type="submit">Add</button>
+                    </form>
+                    {% if residents %}
+                    <ul class="roster-plain">
+                        {% for resident in residents %}
+                            <li>{{ resident.name }} — <span class="muted">{{ resident.id }}</span></li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </details>
+
+                <details class="roster-manage" {{ 'open' if not residents else '' }}>
+                    <summary>Import from a spreadsheet</summary>
+                    <p class="hint">Download a template, fill it in (Google Sheets, Numbers or Excel), export it as CSV, then import it here. Nothing is saved if any line has a problem.</p>
+                    <form class="import-form" method="post" action="{{ url_for('import_residents') }}" enctype="multipart/form-data">
+                        <div class="form-field">
+                            <label for="import_residents_file">Residents · <a href="{{ url_for('csv_template', name='residents_template.csv') }}">download template</a></label>
+                            <input type="file" name="file" id="import_residents_file" accept=".csv,text/csv" required>
+                        </div>
+                        <button class="btn-secondary" type="submit">Import residents</button>
+                    </form>
+                    <form class="import-form" method="post" action="{{ url_for('import_checkins') }}" enctype="multipart/form-data">
+                        <div class="form-field">
+                            <label for="import_checkins_file">Check-ins · <a href="{{ url_for('csv_template', name='checkins_template.csv') }}">download template</a></label>
+                            <input type="file" name="file" id="import_checkins_file" accept=".csv,text/csv" required>
+                        </div>
+                        <button class="btn-secondary" type="submit">Import check-ins</button>
+                    </form>
+                </details>
+            </section>
+
+            <section class="card">
+                <h2>Progress this semester</h2>
+                {% if progress %}
+                <div class="progress-list">
+                    {% for p in progress %}
+                        <div class="progress-row">
+                            <a class="progress-name" href="{{ url_for('history', resident=p.email_or_id) }}">{{ p.full_name }}</a>
+                            {% if config.valid_reasons %}
+                            <div class="progress-tiles">
+                                {% for reason in config.valid_reasons %}
+                                    {% if reason in p.reasons_done %}
+                                        <a class="reason-tile reason-done" href="{{ url_for('history', status='submitted', resident=p.email_or_id, reason=reason) }}" aria-label="{{ reason }} — submitted; view in History" title="{{ reason }} — submitted">{{ loop.index }}</a>
+                                    {% else %}
+                                        <span class="reason-tile" aria-label="{{ reason }} — not yet submitted" title="{{ reason }} — not yet submitted">{{ loop.index }}</span>
+                                    {% endif %}
+                                {% endfor %}
+                            </div>
+                            {% if p.unassigned_submissions %}
+                                <span class="pill pill-warning" title="Submitted appointment{{ 's' if p.unassigned_submissions != 1 else '' }} with no saved reason">{{ p.unassigned_submissions }} reason missing</span>
+                            {% endif %}
+                            {% else %}
+                            <div class="progress-count">{{ p.submitted }}/{{ p.target }}</div>
+                            {% endif %}
+                            <span class="pill progress-status {{ 'pill-positive' if p.done_this_month else 'pill-muted' }}">
+                                {{ 'Done this month' if p.done_this_month else 'Not yet' }}
+                            </span>
+                        </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="empty">No residents on the roster yet.</p>
+                {% endif %}
+            </section>
+        </div>
+
+        <section class="card card-queue">
+            <div class="card-header">
+                <h2>Ready to submit</h2>
+                {% if candidates %}
+                <span class="card-header-meta">{{ candidates|length }} waiting</span>
+                {% endif %}
+            </div>
+
+            {% if not config.valid_reasons %}
+                <p class="empty">config.json has no valid_reasons configured — submitting is disabled until it does.</p>
+            {% elif not candidates %}
+                <p class="empty">Nothing waiting right now — log a check-in above and it'll show up here.</p>
+            {% else %}
+                <form method="post" action="{{ url_for('submit_batch') }}">
+                    <table class="queue-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="select-all" aria-label="Select all"></th>
+                                <th>Name</th>
+                                <th>Date</th>
+                                <th>Time</th>
+                                <th>Location</th>
+                                <th>Notes</th>
+                                {% if sn_groups %}<th>SpeedNotes</th>{% endif %}
+                                <th><span class="visually-hidden">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for candidate in candidates %}
+                                <tr>
+                                    <td><input type="checkbox" class="row-select" name="selected_keys" value="{{ candidate.key }}"></td>
+                                    <td class="name">{{ candidate.name }}</td>
+                                    <td class="datetime">{{ candidate.date }}</td>
+                                    <td class="datetime">{{ candidate.time }}</td>
+                                    <td>
+                                        {{ candidate.location }}
+                                        <input type="text" class="override-input" name="location_{{ candidate.key }}" placeholder="override location">
+                                    </td>
+                                    <td class="notes-cell">{{ candidate.notes or 'No note added' }}</td>
+                                    {% if sn_groups %}
+                                    <td class="sn-cell">
+                                        <div class="sn-summary">
+                                            <span class="sn-default" data-sn-summary>Batch topics</span>
+                                            <button type="button" class="sn-change" data-sn-toggle aria-expanded="false" aria-controls="sn-editor-{{ loop.index }}">Change</button>
+                                        </div>
+                                    </td>
+                                    {% endif %}
+                                    <td class="table-action">
+                                        <a class="note-edit-link" href="{{ url_for('edit_checkin_note', original_index=candidate.original_row_index, return_to='dashboard') }}">Edit note</a>
+                                    </td>
+                                </tr>
+                                {% if sn_groups %}
+                                <tr class="sn-editor-row" id="sn-editor-{{ loop.index }}" hidden>
+                                    <td colspan="8">
+                                        <input type="hidden" name="sn_override_{{ candidate.key }}" value="on" disabled data-sn-flag>
+                                        <div class="sn-editor-head">
+                                            <span>Topics for <strong>{{ candidate.name }}</strong> only. The batch topics don't apply to this row.</span>
+                                            <button type="button" class="sn-change" data-sn-reset>Use batch topics</button>
+                                        </div>
+                                        {{ speednote_chips(sn_groups, 'speednotes_' ~ candidate.key) }}
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            {% endfor %}
+                        </tbody>
+                    </table>
+
+                    <div class="queue-controls">
+                        <div class="form-field">
+                            <label for="reason">Reason</label>
+                            <select name="reason" id="reason">
+                                <option value="" disabled selected>Select reason</option>
+                                {% for reason in config.valid_reasons %}
+                                    <option value="{{ reason }}">{{ reason }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label for="default_location">Default location</label>
+                            <select name="default_location" id="default_location">
+                                <option value="{{ config.default_location }}" selected>{{ config.default_location }}</option>
+                                {% for loc in config.valid_locations if loc != config.default_location %}
+                                    <option value="{{ loc }}">{{ loc }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% if sn_groups %}
+                        <fieldset class="speednotes" id="sn-batch">
+                            <div class="speednotes-head">
+                                <legend>SpeedNotes for this batch</legend>
+                                <span class="speednotes-count"><span data-sn-count>0 topics</span><button type="button" data-sn-clear>Clear</button></span>
+                            </div>
+                            {{ speednote_chips(sn_groups, 'speednotes') }}
+                        </fieldset>
+                        {% endif %}
+                        <label class="check-row">
+                            <input type="checkbox" name="dry_run" value="on" checked>
+                            Dry run (test only, nothing sent)
+                        </label>
+                        <button class="btn-primary" id="submit-action" type="submit">Run dry test</button>
+                    </div>
+                </form>
+            {% endif %}
+        </section>
+        {% if build_info %}
+        <footer class="app-footer">Laker Connection · {{ build_info }}</footer>
+        {% endif %}
+    </div>
+
+    <script>
+        (function () {
+            var tabs = document.querySelectorAll('.segmented [role="tab"]');
+            tabs.forEach(function (tab) {
+                tab.addEventListener('click', function () {
+                    tabs.forEach(function (t) { t.setAttribute('aria-selected', 'false'); });
+                    tab.setAttribute('aria-selected', 'true');
+                    document.querySelectorAll('.tab-panel').forEach(function (panel) {
+                        panel.hidden = panel.dataset.panel !== tab.dataset.tab;
+                    });
+                });
+            });
+
+            var selectAll = document.getElementById('select-all');
+            if (selectAll) {
+                selectAll.addEventListener('change', function () {
+                    document.querySelectorAll('.row-select').forEach(function (cb) {
+                        cb.checked = selectAll.checked;
+                    });
+                });
+            }
+
+            // SpeedNotes: batch count/Clear, and per-row "Change" editors. A row
+            // editor's hidden sn_override flag is only enabled (and so only
+            // posted) while that row uses its own topics.
+            var snBatch = document.getElementById('sn-batch');
+            function topicsIn(scope) {
+                return Array.prototype.map.call(
+                    scope.querySelectorAll('.chip input:checked'), function (i) { return i.value; });
+            }
+            if (snBatch) {
+                var snCount = snBatch.querySelector('[data-sn-count]');
+                var syncCount = function () {
+                    var n = topicsIn(snBatch).length;
+                    snCount.textContent = n + (n === 1 ? ' topic' : ' topics');
+                };
+                snBatch.addEventListener('change', syncCount);
+                snBatch.querySelector('[data-sn-clear]').addEventListener('click', function () {
+                    snBatch.querySelectorAll('.chip input').forEach(function (i) { i.checked = false; });
+                    syncCount();
+                });
+                syncCount();
+            }
+            document.querySelectorAll('[data-sn-toggle]').forEach(function (toggle) {
+                var editor = document.getElementById(toggle.getAttribute('aria-controls'));
+                var flag = editor.querySelector('[data-sn-flag]');
+                var summary = toggle.parentNode.querySelector('[data-sn-summary]');
+                function syncSummary() {
+                    if (flag.disabled) {
+                        summary.className = 'sn-default';
+                        summary.textContent = 'Batch topics';
+                        return;
+                    }
+                    var topics = topicsIn(editor);
+                    summary.className = 'sn-custom';
+                    summary.textContent = topics.length ? topics.join('\n') : 'No topics';
+                }
+                toggle.addEventListener('click', function () {
+                    var opening = editor.hidden;
+                    editor.hidden = !opening;
+                    toggle.setAttribute('aria-expanded', String(opening));
+                    toggle.textContent = opening ? 'Done' : 'Change';
+                    if (opening) flag.disabled = false;
+                    syncSummary();
+                });
+                editor.addEventListener('change', syncSummary);
+                editor.querySelector('[data-sn-reset]').addEventListener('click', function () {
+                    editor.querySelectorAll('.chip input').forEach(function (i) { i.checked = false; });
+                    flag.disabled = true;
+                    editor.hidden = true;
+                    toggle.setAttribute('aria-expanded', 'false');
+                    toggle.textContent = 'Change';
+                    syncSummary();
+                });
+            });
+
+            var queueForm = document.querySelector('.card-queue form');
+            var dryRun = queueForm && queueForm.querySelector('input[name="dry_run"]');
+            var submitAction = document.getElementById('submit-action');
+            function syncSubmissionCopy() {
+                if (!dryRun || !submitAction) return;
+                submitAction.textContent = dryRun.checked ? 'Run dry test' : 'Submit to Starfish';
+            }
+            if (dryRun) {
+                dryRun.addEventListener('change', syncSubmissionCopy);
+                syncSubmissionCopy();
+            }
+            if (queueForm && submitAction) {
+                queueForm.addEventListener('submit', function (event) {
+                    if (!dryRun.checked && !window.confirm('Create real Starfish appointments for the selected residents?')) {
+                        event.preventDefault();
+                        return;
+                    }
+                    submitAction.disabled = true;
+                    submitAction.textContent = dryRun.checked ? 'Running dry test…' : 'Submitting…';
+                });
+            }
+        })();
+    </script>
+</body>
+</html>

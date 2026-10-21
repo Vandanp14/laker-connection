@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SpeedNotes dialog mock</title>
+<!--
+  Static mock of the parts of Starfish's Add Appointment dialog that the
+  SpeedNotes step touches, shaped after the live DOM captured 2026-10-20
+  (scripts/probe_speednotes.py): real <input type="checkbox"> with
+  <label for=...>, one panel visible at a time, Sharing radios on the
+  Scheduling tab, two checkboxes on the Outcomes tab.
+
+  Query params simulate live states:
+    ?preticked=<label>  pre-check a SpeedNote
+    ?drop=<label>       remove a SpeedNote (Starfish renamed/removed it)
+    ?shared=0           Sharing set to Private
+    ?missed=1           "Student missed appointment" checked
+    ?sendcopy=1         "Send a copy of note to student" checked
+-->
+<style>
+.panel { display: none; }
+.panel.active { display: block; }
+</style>
+</head>
+<body>
+<div role="dialog" aria-label="Add Appointment">
+  <div role="tablist">
+    <span role="tab" data-panel="scheduling" aria-selected="true">Scheduling</span>
+    <span role="tab" data-panel="outcomes">Outcomes</span>
+    <span role="tab" data-panel="speednotes">SpeedNotes</span>
+  </div>
+
+  <div class="panel active" id="scheduling">
+    <input type="radio" name="sharing" id="share_shared" checked><label class="x-form-cb-label" for="share_shared">Shared</label>
+    <input type="radio" name="sharing" id="share_private"><label class="x-form-cb-label" for="share_private">Private</label>
+  </div>
+
+  <div class="panel" id="outcomes">
+    <input type="checkbox" id="missed"><label class="x-form-cb-label" for="missed">Student missed appointment</label>
+    <input type="checkbox" id="sendcopy"><label class="x-form-cb-label" for="sendcopy">Send a copy of note to student</label>
+  </div>
+
+  <div class="panel" id="speednotes">
+    <p>Check off the topics discussed and activities completed in this meeting.</p>
+    <div id="speednote-list"></div>
+  </div>
+</div>
+
+<script>
+var TOPICS = [
+  "Academics - Concern/Support Needed", "Academics - Kudos/Check-In", "Break Plans",
+  "Campus Involvement", "Facilities Concern", "Financial/Employment Concerns",
+  "Personal Relationships", "Refer to other office or service",
+  "Referred to Residence Hall Director", "Room Selection", "Roommate Agreement Review",
+  "Roommate Relationship", "Transition/Adjustment", "Wellbeing - Concern/Support Needed",
+  "Wellbeing - Kudos/Check-in"
+];
+var params = new URLSearchParams(location.search);
+var list = document.getElementById("speednote-list");
+TOPICS.forEach(function (topic, i) {
+  if (params.getAll("drop").indexOf(topic) !== -1) return;
+  var id = "activity_" + (3000 + i);
+  var input = document.createElement("input");
+  input.type = "checkbox";
+  input.id = id;
+  input.className = "x-form-checkbox x-form-field";
+  input.checked = params.getAll("preticked").indexOf(topic) !== -1;
+  var label = document.createElement("label");
+  label.className = "x-form-cb-label";
+  label.htmlFor = id;
+  label.textContent = topic;
+  var div = document.createElement("div");
+  div.appendChild(input);
+  div.appendChild(label);
+  list.appendChild(div);
+});
+if (params.get("shared") === "0") document.getElementById("share_private").checked = true;
+if (params.get("missed") === "1") document.getElementById("missed").checked = true;
+if (params.get("sendcopy") === "1") document.getElementById("sendcopy").checked = true;
+
+document.querySelectorAll('[role="tab"]').forEach(function (tab) {
+  tab.addEventListener("click", function () {
+    document.querySelectorAll(".panel").forEach(function (p) { p.classList.remove("active"); });
+    document.getElementById(tab.dataset.panel).classList.add("active");
+  });
+});
+</script>
+</body>
+</html>

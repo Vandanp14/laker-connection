@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Starfish appointment test fixture</title>
+    <style>
+        [hidden] { display: none !important; }
+        body { font: 14px system-ui, sans-serif; }
+        [role="dialog"] { position: fixed; inset: 30px; padding: 20px; background: white; border: 1px solid #999; }
+        .field { margin: 10px 0; }
+        label { display: block; }
+        .toolbar { display: flex; gap: 8px; margin: 10px 0; }
+        #options-root { position: fixed; left: 300px; top: 60px; background: white; z-index: 2; }
+        [role="option"] { padding: 6px; cursor: pointer; }
+        iframe { width: 420px; height: 100px; }
+    </style>
+</head>
+<body>
+    <button type="button" id="appointment-button">Appointment</button>
+    <div id="options-root"></div>
+
+    <section id="appointment-modal" role="dialog" aria-label="Add Appointment" hidden>
+        <h1>Add Appointment</h1>
+
+        <div class="toolbar">
+            <span role="button" tabindex="0" data-action="submit">Submit</span>
+            <span role="button" tabindex="0" data-action="cancel">Never Mind</span>
+        </div>
+
+        <div class="field">
+            <label for="student-input">Student</label>
+            <input id="student-input" role="combobox" aria-label="Student" autocomplete="off">
+        </div>
+
+        <div class="field" id="when-field"></div>
+
+        <div class="field">
+            <label for="start-input">Start Time</label>
+            <input id="start-input" role="combobox" aria-label="Start Time" autocomplete="off">
+        </div>
+
+        <div class="field">
+            <label for="end-input">End Time</label>
+            <input id="end-input" role="combobox" aria-label="End Time" autocomplete="off">
+        </div>
+
+        <div class="field">
+            <label for="where-input">Where</label>
+            <input id="where-input" role="combobox" aria-label="Where" readonly>
+        </div>
+
+        <div class="field">
+            <label for="reason-input">Reason</label>
+            <input id="reason-input" role="combobox" aria-label="Reason" readonly>
+        </div>
+
+        <div class="field">
+            <input type="radio" name="sharing" id="share-shared"><label for="share-shared">Shared</label>
+            <input type="radio" name="sharing" id="share-private"><label for="share-private">Private</label>
+        </div>
+
+        <div role="tablist">
+            <button type="button" role="tab" data-panel="">Scheduling</button>
+            <button type="button" role="tab" data-panel="outcomes-panel">Outcomes</button>
+            <button type="button" role="tab" data-panel="speednotes-panel">SpeedNotes</button>
+        </div>
+        <div class="panel" id="outcomes-panel" hidden>
+            <input type="checkbox" id="missed"><label for="missed">Student missed appointment</label>
+            <input type="checkbox" id="sendcopy"><label for="sendcopy">Send a copy of note to student</label>
+            <iframe title="Detailed Description" srcdoc="<!doctype html><html><body contenteditable='true' style='min-height:90px;margin:0'></body></html>"></iframe>
+        </div>
+        <!-- Live: SpeedNotes are real checkboxes with <label for>, reset by any Reason change. -->
+        <div class="panel" id="speednotes-panel" hidden>
+            <input type="checkbox" id="activity_3030"><label for="activity_3030">Break Plans</label>
+            <input type="checkbox" id="activity_3031"><label for="activity_3031">Room Selection</label>
+            <input type="checkbox" id="activity_3090"><label for="activity_3090">Wellbeing - Kudos/Check-in</label>
+        </div>
+
+        <div class="toolbar">
+            <span role="button" tabindex="0" data-action="submit">Submit</span>
+            <span role="button" tabindex="0" data-action="cancel">Never Mind</span>
+        </div>
+    </section>
+
+    <script>
+        (function () {
+            var modal = document.getElementById('appointment-modal');
+            var optionsRoot = document.getElementById('options-root');
+            var generatedId = 7000;
+
+            window.mockCancelBroken = false;
+            window.mockSubmitStuck = false;
+            window.mockPrivate = false;      // open with Sharing = Private
+            window.mockPreTick = null;       // label of a SpeedNote shown pre-ticked on the SpeedNotes tab
+            window.mockSendCopy = false;     // open with "Send a copy of note to student" ticked
+            window.mockReasonDelayMs = 0;    // live: Reason starts disabled and unlocks later
+
+            function resetSpeedNotes() {
+                document.querySelectorAll('#speednotes-panel input').forEach(function (box) {
+                    box.checked = false;
+                });
+            }
+
+            function clearOptions() {
+                optionsRoot.replaceChildren();
+            }
+
+            function addOption(text, onSelect) {
+                var option = document.createElement('div');
+                option.setAttribute('role', 'option');
+                var visibleText = document.createElement('span');
+                visibleText.setAttribute('aria-hidden', 'true');
+                visibleText.textContent = text;
+                option.appendChild(visibleText);
+                option.addEventListener('click', function () {
+                    onSelect();
+                    clearOptions();
+                });
+                optionsRoot.appendChild(option);
+            }
+
+            function rebuildWhenField() {
+                generatedId += 1;
+                var id = 'ext-comp-' + generatedId;
+                document.getElementById('when-field').innerHTML =
+                    '<label for="' + id + '">When</label>' +
+                    '<input type="text" id="' + id + '" aria-label="Press down to open calendar and select a date.">';
+            }
+
+            function openModal() {
+                rebuildWhenField();
+                modal.hidden = false;
+                modal.querySelectorAll('input:not([type])').forEach(function (input) { input.value = ''; });
+                document.getElementById('share-shared').checked = !window.mockPrivate;
+                document.getElementById('share-private').checked = window.mockPrivate;
+                document.getElementById('missed').checked = false;
+                document.getElementById('sendcopy').checked = window.mockSendCopy;
+                resetSpeedNotes();
+                document.querySelectorAll('.panel').forEach(function (panel) { panel.hidden = true; });
+                modal.dataset.submitClicked = 'false';
+                var reasonInput = document.getElementById('reason-input');
+                reasonInput.disabled = window.mockReasonDelayMs > 0;
+                if (reasonInput.disabled) {
+                    setTimeout(function () { reasonInput.disabled = false; }, window.mockReasonDelayMs);
+                }
+                clearOptions();
+            }
+
+            function closeModal() {
+                modal.hidden = true;
+                clearOptions();
+            }
+
+            document.getElementById('appointment-button').addEventListener('click', openModal);
+
+            document.getElementById('student-input').addEventListener('input', function (event) {
+                var value = event.target.value.trim();
+                clearOptions();
+                if (!value || /Nonexistent/i.test(value)) return;
+                if (/Ambiguous/i.test(value)) {
+                    addOption('Fake One fake1@example.com', function () {});
+                    addOption('Fake Two fake2@example.com', function () {});
+                    return;
+                }
+                var email = /Break Date/i.test(value) ? 'break@example.com' : 'test@example.com';
+                addOption(value + ' ' + email, function () {
+                    event.target.value = value;
+                    if (/Break Date/i.test(value)) {
+                        document.getElementById('when-field').replaceChildren();
+                    }
+                });
+            });
+
+            ['start-input', 'end-input'].forEach(function (id) {
+                document.getElementById(id).addEventListener('input', function (event) {
+                    var value = event.target.value;
+                    clearOptions();
+                    if (!value) return;
+                    addOption(value, function () { event.target.value = value; });
+                });
+            });
+
+            document.getElementById('where-input').addEventListener('click', function (event) {
+                clearOptions();
+                ['Residence Hall', 'In- Residence Halls', 'Out of Residence Halls'].forEach(function (value) {
+                    addOption(value, function () { event.target.value = value; });
+                });
+            });
+
+            document.getElementById('reason-input').addEventListener('click', function (event) {
+                clearOptions();
+                ['Test Reason', 'Laker Connection #1 > FALL', 'Laker Connection #2 > FALL'].forEach(function (value) {
+                    addOption(value, function () {
+                        if (event.target.value !== value) resetSpeedNotes();
+                        event.target.value = value;
+                    });
+                });
+            });
+
+            modal.querySelectorAll('[role="tab"]').forEach(function (tab) {
+                tab.addEventListener('click', function () {
+                    document.querySelectorAll('.panel').forEach(function (panel) {
+                        panel.hidden = panel.id !== tab.dataset.panel;
+                    });
+                    // A box Starfish shows already ticked when the tab renders.
+                    if (tab.dataset.panel === 'speednotes-panel' && window.mockPreTick) {
+                        document.querySelectorAll('#speednotes-panel label').forEach(function (label) {
+                            if (label.textContent === window.mockPreTick) {
+                                document.getElementById(label.htmlFor).checked = true;
+                            }
+                        });
+                    }
+                });
+            });
+
+            modal.querySelectorAll('[data-action="cancel"]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    if (!window.mockCancelBroken) closeModal();
+                });
+            });
+
+            modal.querySelectorAll('[data-action="submit"]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    modal.dataset.submitClicked = 'true';
+                    if (!window.mockSubmitStuck) closeModal();
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

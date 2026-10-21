@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Settings — Laker Connection</title>
+    <link rel="stylesheet" href="/static/main.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-title">
+                <span class="topbar-mark">●</span>
+                <h1>Settings</h1>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/">Dashboard</a>
+            </nav>
+        </header>
+
+        {% if errors %}
+        <div class="banner banner-error">
+            <div class="banner-title">Nothing was saved</div>
+            <ul>
+                {% for error in errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% elif saved %}
+        <div class="banner banner-success">
+            <div class="banner-title">Saved</div>
+        </div>
+        {% endif %}
+
+        <section class="card">
+            <div class="card-header">
+                <h2>Locations</h2>
+            </div>
+            <form method="post" action="{{ url_for('settings') }}">
+                <div class="form-field">
+                    <label for="locations">Your locations, one per line</label>
+                    <textarea name="locations" id="locations" rows="5">{{ locations_text }}</textarea>
+                    <p class="hint">Each one must match a "Where" option in Starfish's appointment form exactly.</p>
+                </div>
+                <div class="form-field">
+                    <label for="default_location">Default location</label>
+                    <select name="default_location" id="default_location">
+                        {% for loc in config.valid_locations %}
+                            <option value="{{ loc }}" {{ 'selected' if loc == config.default_location else '' }}>{{ loc }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button class="btn-primary" type="submit">Save</button>
+            </form>
+            <form method="post" action="{{ url_for('settings_reset') }}">
+                <button class="btn-link" type="submit">Reset to the standard locations</button>
+            </form>
+        </section>
+    </div>
+</body>
+</html>

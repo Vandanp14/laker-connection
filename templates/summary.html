@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Submission Summary</title>
+    <link rel="stylesheet" href="/static/main.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-title">
+                <span class="topbar-mark">●</span>
+                <h1>Submission summary</h1>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/">Dashboard</a>
+            </nav>
+        </header>
+
+        <section class="card">
+            <h2>Batch results</h2>
+            <div class="stat-grid">
+                <div class="stat-tile">
+                    <div class="stat-label">Selected</div>
+                    <div class="stat-value">{{ summary.total_selected | default(0, true) }}</div>
+                </div>
+                <div class="stat-tile positive">
+                    <div class="stat-label">{{ 'Passed dry test' if summary.dry_run else 'Submitted' }}</div>
+                    <div class="stat-value">{{ summary.submitted | default(0, true) }}</div>
+                </div>
+                <div class="stat-tile warning">
+                    <div class="stat-label">Not found</div>
+                    <div class="stat-value">{{ summary.not_found | default(0, true) }}</div>
+                </div>
+                <div class="stat-tile warning">
+                    <div class="stat-label">Ambiguous</div>
+                    <div class="stat-value">{{ summary.ambiguous | default(0, true) }}</div>
+                </div>
+                <div class="stat-tile negative">
+                    <div class="stat-label">Failed</div>
+                    <div class="stat-value">{{ summary.submit_failures | default(0, true) }}</div>
+                </div>
+                {% if summary.uncertain %}
+                <div class="stat-tile negative">
+                    <div class="stat-label">Needs verification</div>
+                    <div class="stat-value">{{ summary.uncertain }}</div>
+                </div>
+                {% endif %}
+                {% if summary.not_attempted %}
+                <div class="stat-tile warning">
+                    <div class="stat-label">Not attempted</div>
+                    <div class="stat-value">{{ summary.not_attempted }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        {% if summary.results and summary.results|length > 0 %}
+        <section class="card failure-table">
+            <h2>Rows that didn't go through</h2>
+            <table class="queue-table">
+                <thead>
+                    <tr>
+                        <th>Resident</th>
+                        <th>Date</th>
+                        <th>Time</th>
+                        <th>Status</th>
+                        <th>What happened</th>
+                        <th>Screenshot</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for result in summary.results %}
+                        <tr>
+                            <td class="name">{{ result.full_name }}</td>
+                            <td class="datetime">{{ result.date }}</td>
+                            <td class="datetime">{{ result.start_time }}</td>
+                            <td>
+                                {% if result.outcome == 'not_attempted' %}
+                                    <span class="pill pill-muted">Not attempted</span>
+                                {% elif result.outcome == 'submit_uncertain' %}
+                                    <span class="pill pill-negative">Verify in Starfish</span>
+                                {% elif result.outcome == 'not_found' %}
+                                    <span class="pill pill-warning">Not found</span>
+                                {% elif result.outcome == 'ambiguous' %}
+                                    <span class="pill pill-warning">Ambiguous</span>
+                                {% else %}
+                                    <span class="pill pill-negative">Failed</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ result.error }}</td>
+                            <td>
+                                {% if result.screenshot and result.screenshot != 'None' %}
+                                    <a href="{{ url_for('failure_screenshot', filename=result.screenshot.split('/')[-1]) }}" target="_blank" rel="noopener">
+                                        <img src="{{ url_for('failure_screenshot', filename=result.screenshot.split('/')[-1]) }}"
+                                             alt="Failure screenshot for {{ result.full_name }}" />
+                                    </a>
+                                {% else %}
+                                    <span class="muted">None</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        {% endif %}
+
+        <a class="back-link" href="/">← Back to dashboard</a>
+    </div>
+</body>
+</html>

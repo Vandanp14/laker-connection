@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edit note — Laker Connection</title>
+    <link rel="stylesheet" href="/static/main.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="app app-narrow">
+        <header class="topbar">
+            <div class="topbar-title">
+                <span class="topbar-mark">●</span>
+                <h1>Edit pending note</h1>
+            </div>
+            <nav class="topbar-nav">
+                <a href="{{ cancel_url }}">Cancel</a>
+            </nav>
+        </header>
+
+        <section class="card note-edit-card">
+            <div class="note-edit-context">
+                <div>
+                    <span class="context-label">Resident</span>
+                    <strong>{{ checkin.full_name }}</strong>
+                </div>
+                <div>
+                    <span class="context-label">Appointment</span>
+                    <strong>{{ checkin.date }} at {{ checkin.start_time }}</strong>
+                </div>
+                <div>
+                    <span class="context-label">Location</span>
+                    <strong>{{ checkin.location }}</strong>
+                </div>
+                <span class="pill pill-warning">Ready</span>
+            </div>
+
+            <form method="post">
+                <input type="hidden" name="checkin_key" value="{{ checkin_key }}">
+                <input type="hidden" name="original_note_digest" value="{{ original_note_digest }}">
+                <input type="hidden" name="return_to" value="{{ return_to }}">
+                <input type="hidden" name="status" value="{{ active_status }}">
+                <input type="hidden" name="resident" value="{{ active_resident }}">
+                <input type="hidden" name="reason" value="{{ active_reason }}">
+
+                <div class="form-field">
+                    <label for="edit-notes">Check-in note</label>
+                    <textarea id="edit-notes" name="notes" rows="9" autofocus>{{ original_notes }}</textarea>
+                    <p class="field-help">This is the note that will be copied into Starfish when the pending check-in is submitted.</p>
+                </div>
+
+                <div class="note-edit-actions">
+                    <button class="btn-primary" type="submit">Save changes</button>
+                    <a class="btn-secondary btn-link" href="{{ cancel_url }}">Cancel</a>
+                </div>
+            </form>
+        </section>
+    </div>
+</body>
+</html>

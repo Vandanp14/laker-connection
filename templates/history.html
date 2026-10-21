@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Check-in History — Laker Connection</title>
+    <link rel="stylesheet" href="/static/main.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+    <div class="app">
+        <header class="topbar">
+            <div class="topbar-title">
+                <span class="topbar-mark">●</span>
+                <h1>History</h1>
+            </div>
+            <nav class="topbar-nav">
+                <a href="/">Dashboard</a>
+            </nav>
+        </header>
+
+        <nav class="history-filters" aria-label="Filter history by status">
+            <a class="history-filter {{ 'is-active' if active_status == 'all' else '' }}"
+               href="{{ url_for('history', status='all', resident=active_resident, reason=active_reason) }}">
+                All <span>{{ status_counts.recorded }}</span>
+            </a>
+            <a class="history-filter {{ 'is-active' if active_status == 'pending' else '' }}"
+               href="{{ url_for('history', status='pending', resident=active_resident, reason=active_reason) }}">
+                Ready <span>{{ status_counts.pending }}</span>
+            </a>
+            <a class="history-filter {{ 'is-active' if active_status == 'submitted' else '' }}"
+               href="{{ url_for('history', status='submitted', resident=active_resident, reason=active_reason) }}">
+                Submitted <span>{{ status_counts.submitted }}</span>
+            </a>
+            {% if status_counts.error %}
+            <a class="history-filter history-filter-error {{ 'is-active' if active_status == 'error' else '' }}"
+               href="{{ url_for('history', status='error', resident=active_resident, reason=active_reason) }}">
+                Needs attention <span>{{ status_counts.error }}</span>
+            </a>
+            {% endif %}
+        </nav>
+
+        {% if active_resident or active_reason %}
+        <div class="active-filter-note">
+            <span>Showing a filtered resident history{% if active_reason %} for “{{ active_reason }}”{% endif %}.</span>
+            <a href="{{ url_for('history', status=active_status) }}">Clear resident filter</a>
+        </div>
+        {% endif %}
+
+        {% if note_updated %}
+        <div class="success-notice" role="status">
+            <strong>Note saved.</strong>
+            The pending Starfish submission will use the updated note.
+        </div>
+        {% endif %}
+
+        <section class="card card-queue">
+            <div class="card-header">
+                <h2>Every check-in logged</h2>
+                <span class="card-header-meta">{{ history|length }} shown · {{ status_counts.recorded }} recorded</span>
+            </div>
+
+            {% if not history %}
+                <p class="empty">
+                    {% if active_status == 'pending' %}
+                        Nothing is waiting for Starfish.
+                    {% elif active_status == 'submitted' %}
+                        No submitted appointments match this filter.
+                    {% elif active_status == 'error' %}
+                        No check-ins need attention.
+                    {% else %}
+                        Nothing logged yet — add a check-in from the dashboard and it'll show up here.
+                    {% endif %}
+                </p>
+            {% else %}
+                <table class="queue-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Date</th>
+                            <th>Time</th>
+                            <th>Location</th>
+                            <th>Notes</th>
+                            <th>Status</th>
+                            <th><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in history %}
+                            <tr id="checkin-{{ row.original_row_index }}">
+                                <td class="name">{{ row.name }}</td>
+                                <td class="datetime">{{ row.date }}</td>
+                                <td class="datetime">{{ row.time }}</td>
+                                <td>{{ row.location }}</td>
+                                <td class="notes-cell">{{ row.notes or 'No note added' }}</td>
+                                <td>
+                                    {% if row.status == 'submitted' %}
+                                        <span class="pill pill-positive">Submitted</span>
+                                        {% if row.reason %}<div class="reason-note">{{ row.reason }}</div>{% endif %}
+                                    {% elif row.status == 'error' %}
+                                        <span class="pill pill-negative">Needs attention</span>
+                                    {% else %}
+                                        <span class="pill pill-warning">Ready</span>
+                                    {% endif %}
+                                </td>
+                                <td class="table-action">
+                                    {% if row.status == 'pending' %}
+                                        <a class="note-edit-link" href="{{ url_for('edit_checkin_note', original_index=row.original_row_index, return_to='history', status=active_status, resident=active_resident, reason=active_reason) }}">Edit note</a>
+                                    {% else %}
+                                        <span class="no-action" aria-hidden="true">—</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% endif %}
+        </section>
+    </div>
+</body>
+</html>
