@@ -12,6 +12,25 @@
 </div>
 {%- endmacro %}
 {% set sn_groups = config.speednote_groups or [] %}
+{% set active_tab = form_state.tab if form_state else 'quick' %}
+{% set fv = form_state['values'] if form_state else {} %}
+{% macro form_error(tab) -%}
+{% if form_state and form_state.tab == tab %}
+<div class="banner banner-error form-error" data-form-error="{{ tab }}" role="alert">
+    <div class="banner-title">{{ form_state.message }} — nothing was saved, your entries are still below</div>
+    <ul>
+        {% for error in form_state.errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+{%- endmacro %}
+{% macro req() %}<span class="req" aria-hidden="true">*</span>{% endmacro %}
+{% macro location_options(selected) -%}
+<option value="" disabled{% if not selected %} selected{% endif %}>Select location</option>
+{% for loc in config.valid_locations or [] %}
+    <option value="{{ loc }}"{% if loc == selected %} selected{% endif %}>{{ loc }}</option>
+{% endfor %}
+{%- endmacro %}
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -77,94 +96,90 @@
             <section class="card">
                 <div class="card-header">
                     <h2>Log a check-in</h2>
-                    <div class="segmented" role="tablist">
-                        <button type="button" role="tab" aria-selected="true" data-tab="quick">Quick</button>
-                        <button type="button" role="tab" aria-selected="false" data-tab="batch">Same-day batch</button>
-                        <button type="button" role="tab" aria-selected="false" data-tab="bulk">Bulk paste</button>
+                    <div class="segmented" role="tablist" data-active-tab="{{ active_tab }}">
+                        <button type="button" role="tab" aria-selected="{{ 'true' if active_tab == 'quick' else 'false' }}" data-tab="quick">Quick</button>
+                        <button type="button" role="tab" aria-selected="{{ 'true' if active_tab == 'batch' else 'false' }}" data-tab="batch">Same-day batch</button>
+                        <button type="button" role="tab" aria-selected="{{ 'true' if active_tab == 'bulk' else 'false' }}" data-tab="bulk">Bulk paste</button>
                     </div>
                 </div>
 
-                <div class="tab-panel" data-panel="quick">
+                <p class="req-legend"><span class="req" aria-hidden="true">*</span> required</p>
+                <div class="tab-panel" data-panel="quick"{% if active_tab != 'quick' %} hidden{% endif %}>
+                    {{ form_error('quick') }}
                     <form method="post" action="{{ url_for('add_checkin') }}">
                         <div class="form-row">
                             <div class="form-field">
-                                <label for="full_name">Resident</label>
-                                <select name="full_name" id="full_name">
-                                    <option value="" disabled selected>Select resident</option>
+                                <label for="full_name">Resident {{ req() }}</label>
+                                <select name="full_name" id="full_name" required>
+                                    <option value="" disabled{% if not fv.full_name %} selected{% endif %}>Select resident</option>
                                     {% for resident in residents %}
-                                        <option value="{{ resident.name }}">{{ resident.name }}</option>
+                                        <option value="{{ resident.name }}"{% if resident.name == fv.full_name %} selected{% endif %}>{{ resident.name }}</option>
                                     {% endfor %}
                                 </select>
                             </div>
                             <div class="form-field">
-                                <label for="date">Date</label>
-                                <input type="date" name="date" id="date" required>
+                                <label for="date">Date {{ req() }}</label>
+                                <input type="date" name="date" id="date" value="{{ fv.date or '' }}" required>
                             </div>
                         </div>
 
                         <div class="form-row">
                             <div class="form-field">
                                 <label for="start_time">Start time (blank = auto-chain +{{ config.slot_duration_minutes }}m)</label>
-                                <input type="text" name="start_time" id="start_time" pattern="[0-9]{2}:[0-9]{2}" placeholder="14:15" maxlength="5">
+                                <input type="text" name="start_time" id="start_time" value="{{ fv.start_time or '' }}" pattern="[0-9]{2}:[0-9]{2}" placeholder="14:15" maxlength="5" title="24-hour HH:MM, e.g. 14:15">
                             </div>
                             <div class="form-field">
-                                <label for="location">Location</label>
-                                <select name="location" id="location">
-                                    <option value="" disabled selected>Select location</option>
-                                    {% if config.valid_locations %}
-                                        {% for loc in config.valid_locations %}
-                                            <option value="{{ loc }}">{{ loc }}</option>
-                                        {% endfor %}
-                                    {% endif %}
+                                <label for="location">Location {{ req() }}</label>
+                                <select name="location" id="location" required>
+                                    {{ location_options(fv.location) }}
                                 </select>
                             </div>
                         </div>
 
                         <div class="form-field">
                             <label for="notes">Notes</label>
-                            <textarea name="notes" id="notes" rows="3"></textarea>
+                            <textarea name="notes" id="notes" rows="3">{{ fv.notes or '' }}</textarea>
                         </div>
 
                         <button class="btn-primary" type="submit">Add check-in</button>
                     </form>
                 </div>
 
-                <div class="tab-panel" data-panel="batch" hidden>
+                <div class="tab-panel" data-panel="batch"{% if active_tab != 'batch' %} hidden{% endif %}>
+                    {{ form_error('batch') }}
                     <p class="hint">
                         For a run of back-to-back conversations on one day. Check off everyone you
                         talked to — only the first one needs a start time, the rest auto-chain
                         +{{ config.slot_duration_minutes }}m each.
                     </p>
-                    <form method="post" action="{{ url_for('add_checkins_batch') }}">
+                    <form method="post" action="{{ url_for('add_checkins_batch') }}"
+                          data-require-one=".roster-row input[type=checkbox]"
+                          data-require-one-message="Check at least one resident you talked to.">
                         <div class="form-row">
                             <div class="form-field">
-                                <label for="batch_date">Date</label>
-                                <input type="date" name="date" id="batch_date" required>
+                                <label for="batch_date">Date {{ req() }}</label>
+                                <input type="date" name="date" id="batch_date" value="{{ fv.date or '' }}" required>
                             </div>
                             <div class="form-field">
-                                <label for="first_start_time">First start time</label>
-                                <input type="text" name="first_start_time" id="first_start_time" pattern="[0-9]{2}:[0-9]{2}" placeholder="13:00" maxlength="5" required>
+                                <label for="first_start_time">First start time {{ req() }}</label>
+                                <input type="text" name="first_start_time" id="first_start_time" value="{{ fv.first_start_time or '' }}" pattern="[0-9]{2}:[0-9]{2}" placeholder="13:00" maxlength="5" title="24-hour HH:MM, e.g. 13:00" required>
                             </div>
                         </div>
                         <div class="form-field">
-                            <label for="batch_location">Location (applies to everyone)</label>
-                            <select name="location" id="batch_location">
-                                <option value="" disabled selected>Select location</option>
-                                {% if config.valid_locations %}
-                                    {% for loc in config.valid_locations %}
-                                        <option value="{{ loc }}">{{ loc }}</option>
-                                    {% endfor %}
-                                {% endif %}
+                            <label for="batch_location">Location (applies to everyone) {{ req() }}</label>
+                            <select name="location" id="batch_location" required>
+                                {{ location_options(fv.location) }}
                             </select>
                         </div>
 
                         {% if residents %}
+                        <span class="field-label">Residents {{ req() }}</span>
                         <div class="roster-list">
                             {% for resident in residents %}
                                 <label class="roster-row">
-                                    <input type="checkbox" name="checked_{{ resident.id }}">
+                                    <input type="checkbox" name="checked_{{ resident.id }}"{% if fv['checked_' ~ resident.id] == 'on' %} checked{% endif %}>
                                     <span class="roster-name">{{ resident.name }}</span>
-                                    <input type="text" class="roster-notes" name="notes_{{ resident.id }}" placeholder="What did you talk about?">
+                                    <input type="text" class="roster-notes" name="notes_{{ resident.id }}" value="{{ fv['notes_' ~ resident.id] or '' }}" placeholder="What did you talk about?">
                                 </label>
                             {% endfor %}
                         </div>
@@ -172,11 +187,13 @@
                         <p class="empty">No residents on the roster yet — add one below first.</p>
                         {% endif %}
 
+                        <p class="form-alert" data-form-alert role="alert" hidden></p>
                         <button class="btn-primary" type="submit">Log these check-ins</button>
                     </form>
                 </div>
 
-                <div class="tab-panel" data-panel="bulk" hidden>
+                <div class="tab-panel" data-panel="bulk"{% if active_tab != 'bulk' %} hidden{% endif %}>
+                    {{ form_error('bulk') }}
                     <p class="hint">
                         Catching up on a backlog? One line per check-in:
                         <code>Name | MM-DD-YYYY | HH:MM or blank | notes</code>.
@@ -184,21 +201,16 @@
                     </p>
                     <form method="post" action="{{ url_for('add_checkins_bulk') }}">
                         <div class="form-field">
-                            <label for="bulk_location">Location (applies to every line)</label>
-                            <select name="location" id="bulk_location">
-                                <option value="" disabled selected>Select location</option>
-                                {% if config.valid_locations %}
-                                    {% for loc in config.valid_locations %}
-                                        <option value="{{ loc }}">{{ loc }}</option>
-                                    {% endfor %}
-                                {% endif %}
+                            <label for="bulk_location">Location (applies to every line) {{ req() }}</label>
+                            <select name="location" id="bulk_location" required>
+                                {{ location_options(fv.location) }}
                             </select>
                         </div>
                         <div class="form-field">
-                            <label for="bulk_text">Check-ins</label>
-                            <textarea name="bulk_text" id="bulk_text" rows="8" placeholder="Jane Doe | 10-01-2026 | 14:00 | talked about classes
+                            <label for="bulk_text">Check-ins {{ req() }}</label>
+                            <textarea name="bulk_text" id="bulk_text" rows="8" required placeholder="Jane Doe | 10-01-2026 | 14:00 | talked about classes
 John Smith | 10-02-2026 | 09:00 | discussed roommate issue
-Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
+Alex Rivera | 10-02-2026 |  | followed up on housing">{{ fv.bulk_text or '' }}</textarea>
                         </div>
                         <button class="btn-primary" type="submit">Add all</button>
                     </form>
@@ -260,11 +272,13 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
             {% elif not candidates %}
                 <p class="empty">Nothing waiting right now — log a check-in above and it'll show up here.</p>
             {% else %}
-                <form method="post" action="{{ url_for('submit_batch') }}">
+                <form method="post" action="{{ url_for('submit_batch') }}"
+                      data-require-one=".row-select"
+                      data-require-one-message="Check at least one row to submit.">
                     <table class="queue-table">
                         <thead>
                             <tr>
-                                <th><input type="checkbox" id="select-all" aria-label="Select all"></th>
+                                <th><input type="checkbox" id="select-all" aria-label="Select all"> {{ req() }}</th>
                                 <th>Name</th>
                                 <th>Date</th>
                                 <th>Time</th>
@@ -316,8 +330,8 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
 
                     <div class="queue-controls">
                         <div class="form-field">
-                            <label for="reason">Reason</label>
-                            <select name="reason" id="reason">
+                            <label for="reason">Reason {{ req() }}</label>
+                            <select name="reason" id="reason" required>
                                 <option value="" disabled selected>Select reason</option>
                                 {% for reason in config.valid_reasons %}
                                     <option value="{{ reason }}">{{ reason }}</option>
@@ -336,7 +350,7 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
                         {% if sn_groups %}
                         <fieldset class="speednotes" id="sn-batch">
                             <div class="speednotes-head">
-                                <legend>SpeedNotes for this batch</legend>
+                                <legend>SpeedNotes for this batch {{ req() }}</legend>
                                 <span class="speednotes-count"><span data-sn-count>0 topics</span><button type="button" data-sn-clear>Clear</button></span>
                             </div>
                             {{ speednote_chips(sn_groups, 'speednotes') }}
@@ -346,6 +360,7 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
                             <input type="checkbox" name="dry_run" value="on" checked>
                             Dry run (test only, nothing sent)
                         </label>
+                        <p class="form-alert" data-form-alert role="alert" hidden></p>
                         <button class="btn-primary" id="submit-action" type="submit">Run dry test</button>
                     </div>
                 </form>
@@ -481,6 +496,42 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
                 });
             });
 
+            // "Pick at least one" groups the browser's own `required` can't
+            // express. Blocking here keeps the user on this page with every
+            // note they typed, instead of a round trip to an error.
+            function showAlert(form, message) {
+                var alertEl = form.querySelector('[data-form-alert]');
+                alertEl.textContent = message;
+                alertEl.hidden = !message;
+            }
+            function snProblem(form) {
+                if (!snBatch || topicsIn(snBatch).length) return '';
+                var usesBatch = Array.prototype.some.call(
+                    form.querySelectorAll('.row-select:checked'), function (cb) {
+                        var toggle = cb.closest('tr').querySelector('[data-sn-toggle]');
+                        var editor = toggle && document.getElementById(toggle.getAttribute('aria-controls'));
+                        return !editor || editor.querySelector('[data-sn-flag]').disabled;
+                    });
+                return usesBatch
+                    ? 'Pick at least one SpeedNote for this batch, or give those rows their own topics.'
+                    : '';
+            }
+            document.querySelectorAll('form[data-require-one]').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    var problem = form.querySelector(form.dataset.requireOne + ':checked')
+                        ? snProblem(form)
+                        : form.dataset.requireOneMessage;
+                    if (problem) {
+                        event.preventDefault();
+                        showAlert(form, problem);
+                        form.querySelector('[data-form-alert]').scrollIntoView({ block: 'center' });
+                    }
+                });
+                form.addEventListener('change', function () {
+                    if (!form.querySelector('[data-form-alert]').hidden) showAlert(form, '');
+                });
+            });
+
             var queueForm = document.querySelector('.card-queue form');
             var dryRun = queueForm && queueForm.querySelector('input[name="dry_run"]');
             var submitAction = document.getElementById('submit-action');
@@ -494,6 +545,7 @@ Alex Rivera | 10-02-2026 |  | followed up on housing"></textarea>
             }
             if (queueForm && submitAction) {
                 queueForm.addEventListener('submit', function (event) {
+                    if (event.defaultPrevented) return;
                     if (!dryRun.checked && !window.confirm('Create real Starfish appointments for the selected residents?')) {
                         event.preventDefault();
                         return;

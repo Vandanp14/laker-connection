@@ -710,3 +710,79 @@ def test_no_analytics_module_is_harmless(sn_dashboard, monkeypatch):
     response = _post({'speednotes': ['Room Selection'], 'dry_run': ''})
     assert response.status_code == 200
     assert sn_dashboard['calls'] == 1
+
+
+# --- Form errors keep the user on the dashboard with their input intact ---
+
+def test_add_checkin_error_rerenders_dashboard_with_notes(isolated_dashboard):
+    with dashboard.app.test_client() as client:
+        response = client.post('/add-checkin', data={
+            'full_name': 'Jane Doe',
+            'date': '2026-08-16',
+            'start_time': '13:00',  # overlaps the existing row
+            'location': 'In- Residence Halls',
+            'notes': 'long note I do not want to retype',
+        })
+    assert response.status_code == 400
+    body = response.data.decode()
+    assert 'Laker Connection Dashboard' in body
+    assert 'long note I do not want to retype' in body
+    assert 'value="2026-08-16"' in body
+    assert 'value="13:00"' in body
+    assert 'data-form-error="quick"' in body
+
+
+def test_add_checkin_missing_location_keeps_notes(isolated_dashboard):
+    with dashboard.app.test_client() as client:
+        response = client.post('/add-checkin', data={
+            'full_name': 'Jane Doe',
+            'date': '2026-09-17',
+            'start_time': '14:00',
+            'notes': 'note survives missing location',
+        })
+    assert response.status_code == 400
+    body = response.data.decode()
+    assert 'note survives missing location' in body
+    assert '<option value="Jane Doe" selected>' in body
+    lines = (isolated_dashboard / "checkins.csv").read_text().splitlines()
+    assert len(lines) == 2
+
+
+def test_add_checkins_batch_error_keeps_checked_and_notes(isolated_dashboard):
+    with dashboard.app.test_client() as client:
+        response = client.post('/add-checkins-batch', data={
+            'date': '2026-08-16',  # same month as Jane's existing row: cadence error
+            'first_start_time': '15:00',
+            'location': 'In- Residence Halls',
+            'checked_jdoe@oswego.edu': 'on',
+            'notes_jdoe@oswego.edu': 'batch note kept',
+        })
+    assert response.status_code == 400
+    body = response.data.decode()
+    assert 'data-form-error="batch"' in body
+    assert 'batch note kept' in body
+    assert 'name="checked_jdoe@oswego.edu" checked' in body
+    assert 'data-active-tab="batch"' in body
+
+
+def test_add_checkins_bulk_error_keeps_pasted_text(isolated_dashboard):
+    with dashboard.app.test_client() as client:
+        response = client.post('/add-checkins-bulk', data={
+            'location': 'In- Residence Halls',
+            'bulk_text': 'Nobody Here | 09-01-2026 | 10:00 | pasted text kept',
+        })
+    assert response.status_code == 400
+    body = response.data.decode()
+    assert 'data-form-error="bulk"' in body
+    assert 'pasted text kept' in body
+
+
+def test_mandatory_fields_marked_required(isolated_dashboard):
+    with dashboard.app.test_client() as client:
+        body = client.get('/').data.decode()
+    assert '<select name="full_name" id="full_name" required>' in body
+    assert '<select name="location" id="location" required>' in body
+    assert '<select name="location" id="batch_location" required>' in body
+    assert '<select name="location" id="bulk_location" required>' in body
+    assert '<select name="reason" id="reason" required>' in body
+    assert 'class="req"' in body

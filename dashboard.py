@@ -141,8 +141,23 @@ def _status_counts(rows):
     }
 
 
+def _form_error(tab: str, message: str, details):
+    """Re-render the dashboard with the failed form still filled in.
+
+    The standalone error page loses everything the user typed (notes
+    especially), so add-check-in errors stay on the dashboard instead.
+    """
+    form_state = {'tab': tab, 'message': message, 'errors': list(details),
+                  'values': request.form.to_dict()}
+    return _render_index(form_state, status=400)
+
+
 @app.route('/')
 def index():
+    return _render_index()
+
+
+def _render_index(form_state=None, status: int = 200):
     try:
         config = _load_config()
         residents = data.load_residents(os.path.join(DASH_ROOT, 'residents.csv'))
@@ -198,8 +213,9 @@ def index():
         config=config,
         import_notice=_import_notice(),
         build_info=_build_info(),
-        current_datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    )
+        current_datetime=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        form_state=form_state,
+    ), status
 
 @app.route('/history')
 def history():
@@ -388,14 +404,18 @@ def add_checkin():
         location = request.form.get('location', '').strip()
         notes = request.form.get('notes', '').strip()
 
-        if not full_name or not date_iso:
-            return _error_page("Couldn't add check-in", ["Missing resident or date"])
+        missing = [label for label, value in
+                   (('resident', full_name), ('date', date_iso), ('location', location))
+                   if not value]
+        if missing:
+            return _form_error('quick', "Couldn't add check-in",
+                               [f"Missing {', '.join(missing)}"])
 
         # <input type="date"> always posts YYYY-MM-DD; checkins.csv uses MM-DD-YYYY.
         try:
             date = datetime.strptime(date_iso, "%Y-%m-%d").strftime("%m-%d-%Y")
         except ValueError:
-            return _error_page("Couldn't add check-in", [f'Date "{date_iso}" is not a valid date'])
+            return _form_error('quick', "Couldn't add check-in", [f'Date "{date_iso}" is not a valid date'])
 
         checkins_path = os.path.join(DASH_ROOT, 'checkins.csv')
         residents_path = os.path.join(DASH_ROOT, 'residents.csv')
@@ -422,7 +442,7 @@ def add_checkin():
         validation_errors = data.validate(resolved, residents, config, submission_log)
         errors = resolution_errors + validation_errors
         if errors:
-            return _error_page("Couldn't add check-in", errors)
+            return _form_error('quick', "Couldn't add check-in", errors)
 
         with open(checkins_path, 'a', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
@@ -446,12 +466,16 @@ def add_checkins_batch():
         first_start_time = request.form.get('first_start_time', '').strip()
         location = request.form.get('location', '').strip()
 
-        if not date_iso:
-            return _error_page("Couldn't log check-ins", ["Missing date"])
+        missing = [label for label, value in
+                   (('date', date_iso), ('first start time', first_start_time), ('location', location))
+                   if not value]
+        if missing:
+            return _form_error('batch', "Couldn't log check-ins",
+                               [f"Missing {', '.join(missing)}"])
         try:
             date = datetime.strptime(date_iso, "%Y-%m-%d").strftime("%m-%d-%Y")
         except ValueError:
-            return _error_page("Couldn't log check-ins", [f'Date "{date_iso}" is not a valid date'])
+            return _form_error('batch', "Couldn't log check-ins", [f'Date "{date_iso}" is not a valid date'])
 
         residents_path = os.path.join(DASH_ROOT, 'residents.csv')
         checkins_path = os.path.join(DASH_ROOT, 'checkins.csv')
@@ -482,7 +506,7 @@ def add_checkins_batch():
             })
 
         if not new_rows:
-            return _error_page("Couldn't log check-ins", ["No residents selected"])
+            return _form_error('batch', "Couldn't log check-ins", ["No residents selected"])
 
         candidate_checkins = existing_checkins + new_rows
         resolved, resolution_errors = data.resolve_checkins(
@@ -490,7 +514,7 @@ def add_checkins_batch():
         validation_errors = data.validate(resolved, residents, config, submission_log)
         errors = resolution_errors + validation_errors
         if errors:
-            return _error_page("Couldn't log check-ins", errors)
+            return _form_error('batch', "Couldn't log check-ins", errors)
 
         with open(checkins_path, 'a', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
@@ -523,7 +547,7 @@ def add_checkins_bulk():
         location = request.form.get('location', '').strip()
 
         if not location:
-            return _error_page("Couldn't add check-ins", ["Missing location"])
+            return _form_error('bulk', "Couldn't add check-ins", ["Missing location"])
 
         residents_path = os.path.join(DASH_ROOT, 'residents.csv')
         checkins_path = os.path.join(DASH_ROOT, 'checkins.csv')
@@ -565,10 +589,10 @@ def add_checkins_bulk():
             })
 
         if parse_errors:
-            return _error_page("Couldn't add check-ins — fix these lines and paste again", parse_errors)
+            return _form_error('bulk', "Couldn't add check-ins — fix these lines and submit again", parse_errors)
 
         if not new_rows:
-            return _error_page("Couldn't add check-ins", ["No check-in lines found"])
+            return _form_error('bulk', "Couldn't add check-ins", ["No check-in lines found"])
 
         candidate_checkins = existing_checkins + new_rows
         resolved, resolution_errors = data.resolve_checkins(
@@ -576,7 +600,7 @@ def add_checkins_bulk():
         validation_errors = data.validate(resolved, residents, config, submission_log)
         errors = resolution_errors + validation_errors
         if errors:
-            return _error_page("Couldn't add check-ins", errors)
+            return _form_error('bulk', "Couldn't add check-ins", errors)
 
         with open(checkins_path, 'a', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)

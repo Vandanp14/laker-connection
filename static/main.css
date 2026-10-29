@@ -1349,3 +1349,38 @@ img {
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Required fields ---------- */
+
+.req {
+    color: var(--negative);
+    font-weight: 700;
+    margin-left: 2px;
+}
+
+.req-legend {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--text-3);
+}
+
+.field-label {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 650;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.form-error {
+    margin-bottom: 14px;
+}
+
+.form-alert {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--negative);
+}
