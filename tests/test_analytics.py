@@ -156,3 +156,68 @@ def test_tls_falls_back_to_macos_cert_bundle(analytics, monkeypatch):
     ctx = analytics._tls_context()
     assert loaded == ["/etc/ssl/cert.pem"]
     assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+
+
+ERROR_KEYS = {"token", "event", "install_id", "version", "stage", "kind", "student", "when",
+              "start", "end", "where", "reason_locked", "reason_options", "waited_ms", "elapsed_ms"}
+
+
+def test_error_payload_keys_exact(analytics):
+    diag = {"stage": "reason", "kind": "timeout", "student": "Doe, Jane", "when": "01/15/2026",
+            "start_time": "1:00 pm", "end_time": "", "where": "In- Residence Halls",
+            "reason_disabled": True, "reason_options": -1, "waited_ms": 45000, "elapsed_ms": 61000}
+    body = analytics.payload("error", **analytics.error_fields(diag))
+    assert set(body) == ERROR_KEYS
+    assert body["stage"] == "reason" and body["kind"] == "timeout"
+    assert (body["student"], body["when"], body["start"], body["end"], body["where"]) == (1, 1, 1, 0, 1)
+    assert body["reason_locked"] == 1 and body["reason_options"] == -1
+
+
+def test_error_fields_never_carry_text(analytics):
+    diag = {"stage": "Jane Doe", "kind": "Jane Doe", "where": "Out of Residence Halls",
+            "student": "Doe, Jane", "url_path": "/jane", "error": "No match for Jane Doe"}
+    body = analytics.payload("error", **analytics.error_fields(diag))
+    assert body["stage"] == "other" and body["kind"] == "other"
+    assert body["where"] == 1 and body["student"] == 1
+    for key, value in body.items():
+        if key in ("token", "event", "install_id", "version"):
+            continue
+        assert "jane" not in str(value).lower()
+        assert isinstance(value, int) or value in analytics.ERROR_STAGES + analytics.ERROR_KINDS
+
+
+def test_error_fields_clamp_numbers(analytics):
+    fields = analytics.error_fields({"waited_ms": 10**9, "elapsed_ms": -5, "reason_disabled": None,
+                                     "reason_options": 9999})
+    assert fields["waited_ms"] == 600000 and fields["elapsed_ms"] == 0
+    assert fields["reason_locked"] == 2 and fields["reason_options"] == 200
+    assert analytics.error_fields({})["reason_options"] == -1
+
+
+def test_error_kind_allows_exception_class_names(analytics):
+    assert analytics.error_fields({"kind": "TimeoutError"})["kind"] == "TimeoutError"
+    assert analytics.error_fields({"kind": "Weird-Name"})["kind"] == "other"
+
+
+def test_error_kind_allows_playwright_bare_error(analytics):
+    assert analytics.error_fields({"kind": "Error"})["kind"] == "Error"
+    assert analytics.error_fields({"kind": "Jane"})["kind"] == "other"
+
+
+def test_track_batch_sends_in_order_on_one_thread(analytics, server):
+    _, bodies = server
+    thread = analytics.track_batch([
+        ("submit", {"submitted": 0, "failed": 2, "uncertain": 0, "skipped": 0, "crashed": 0,
+                    "seconds": 9}),
+        ("error", analytics.error_fields({"stage": "reason", "kind": "timeout"})),
+        ("error", analytics.error_fields({"stage": "where", "kind": "mismatch"})),
+    ])
+    thread.join(10)
+    assert [b["event"] for b in bodies] == ["submit", "error", "error"]
+    assert [b.get("stage") for b in bodies[1:]] == ["reason", "where"]
+
+
+def test_track_batch_disabled_returns_none(analytics, server, monkeypatch):
+    monkeypatch.setenv("LAKER_NO_ANALYTICS", "1")
+    assert analytics.track_batch([("launch", {})]) is None
+    assert server[1] == []

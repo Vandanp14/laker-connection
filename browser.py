@@ -2,8 +2,10 @@ import asyncio
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
+from urllib.parse import urlparse
 from playwright.async_api import async_playwright, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 
 import data
@@ -253,6 +255,63 @@ async def _wait_until_enabled(page: Page, locator, timeout_ms: int) -> None:
         waited += 250
 
 
+# Fixed labels for failure diagnostics. These (never free text) are what
+# leaves the user's Mac in the public app's anonymous error events.
+STAGES = ("dialog", "student", "when", "start_time", "end_time", "where", "reason",
+          "sharing", "notes", "outcomes", "speednotes", "close_dry_run", "submit", "other")
+KINDS = ("timeout", "not_found", "ambiguous", "mismatch", "guard", "uncertain", "not_attempted")
+_EXCEPTION_NAME = re.compile(r"^[A-Za-z_]{1,40}$")
+
+
+def kind_for(exc: Optional[BaseException], outcome: str) -> str:
+    """Failure kind label for a row's outcome and (optional) exception."""
+    if isinstance(exc, PlaywrightTimeoutError):
+        return "timeout"
+    if exc is not None:
+        name = type(exc).__name__
+        return name if _EXCEPTION_NAME.match(name) else "other"
+    return {
+        SubmitOutcome.NOT_FOUND: "not_found",
+        SubmitOutcome.AMBIGUOUS: "ambiguous",
+        SubmitOutcome.SUBMIT_UNCERTAIN: "uncertain",
+        SubmitOutcome.NOT_ATTEMPTED: "not_attempted",
+    }.get(outcome, "other")
+
+
+async def snapshot_dialog(page: Page) -> Dict:
+    """What the appointment dialog shows right now, for the run log. Never raises."""
+    snap = {"dialog_open": False, "student": "", "when": "", "start_time": "", "end_time": "",
+            "where": "", "reason": "", "reason_disabled": None, "reason_options": -1,
+            "url_path": ""}
+    try:
+        snap["url_path"] = urlparse(page.url).path
+        snap["dialog_open"] = await dialog_is_open(page)
+        if not snap["dialog_open"]:
+            return snap
+        fields = {"student": ROLE_NAMES["student_combobox"],
+                  "start_time": ROLE_NAMES["start_time_combobox"],
+                  "end_time": ROLE_NAMES["end_time_combobox"],
+                  "where": ROLE_NAMES["where_combobox"],
+                  "reason": ROLE_NAMES["reason_combobox"]}
+        for key, name in fields.items():
+            try:
+                box = dialog(page).get_by_role("combobox", name=name).first
+                snap[key] = await box.input_value(timeout=1000)
+                if key == "reason":
+                    snap["reason_disabled"] = await box.is_disabled(timeout=1000)
+            except Exception:
+                pass
+        try:
+            snap["when"] = await when_input(page).input_value(timeout=1000)
+        except Exception:
+            pass
+        options = await page.get_by_role("option").count()
+        snap["reason_options"] = options if options else -1
+    except Exception:
+        pass
+    return snap
+
+
 def to_mdy_slash(date_str: str) -> str:
     """Convert checkins.csv's MM-DD-YYYY to the When field's confirmed accepted format, MM/DD/YYYY."""
     return date_str.replace("-", "/")
@@ -323,12 +382,98 @@ async def verify_logged_in(page: Page, config: dict) -> bool:
     except PlaywrightTimeoutError:
         return False
 
+_STAGE_LABEL = {
+    "opening the appointment dialog": "dialog",
+    "finding the student": "student",
+    "filling the When date": "when",
+    "selecting the start time": "start_time",
+    "selecting the end time": "end_time",
+    "selecting the location": "where",
+    "selecting the reason": "reason",
+    "checking Sharing": "sharing",
+    "filling the notes": "notes",
+    "checking the Outcomes checkboxes": "outcomes",
+    "ticking SpeedNotes": "speednotes",
+    "closing the dry run": "close_dry_run",
+    "submitting the appointment": "submit",
+}
+_GUARD_STAGES = ("sharing", "outcomes", "speednotes")
+
+
+def _enter(diag: Dict, stage: str) -> str:
+    """Record which step submit_one is on (and since when) for diagnostics."""
+    diag["stage_text"] = stage
+    diag["stage_started"] = time.monotonic()
+    return stage
+
+
+READBACK_TIMEOUT_MS = 1500
+
+
+async def _confirm_value(combobox, label: str, expected: str) -> Optional[str]:
+    """None if the field shows `expected` (case/spacing ignored) within
+    READBACK_TIMEOUT_MS, else an error message. A field that can't be read
+    at all (e.g. the combobox role isn't on an <input>) is not a mismatch:
+    read-back just can't verify it, so the row continues."""
+    def norm(value):
+        return " ".join((value or "").split()).casefold()
+    actual = ""
+    waited = 0
+    while True:
+        try:
+            actual = await combobox.first.input_value(timeout=1000)
+        except Exception:
+            return None
+        if norm(actual) == norm(expected):
+            return None
+        if waited >= READBACK_TIMEOUT_MS:
+            return f"{label} shows '{actual}' after picking '{expected}'"
+        await asyncio.sleep(0.15)
+        waited += 150
+
+
 async def submit_one(
     page: Page,
     row: Dict,
     run_reason: str,
     dry_run: bool = False,
     speednotes_enabled: bool = False,
+    diag: Optional[Dict] = None,
+) -> Tuple[str, Optional[str]]:
+    """
+    Process a single checkin row. Returns (outcome, error_message).
+
+    `diag`, if given, is filled in place with: stage (label from STAGES),
+    kind (label), waited_ms (time spent in the step that ended the row),
+    elapsed_ms (whole row) and reason_enable_ms (how long Reason took to
+    unlock, None if the row never got that far).
+    """
+    diag = {} if diag is None else diag
+    started = time.monotonic()
+    diag["reason_enable_ms"] = None
+    outcome, error = await _submit_one_steps(
+        page, row, run_reason, dry_run=dry_run, speednotes_enabled=speednotes_enabled, diag=diag)
+    now = time.monotonic()
+    stage = _STAGE_LABEL.get(diag.pop("stage_text", ""), "other")
+    diag["stage"] = stage
+    diag["elapsed_ms"] = round((now - started) * 1000)
+    diag["waited_ms"] = round((now - diag.pop("stage_started", started)) * 1000)
+    exc = diag.pop("exc", None)
+    if "kind" not in diag:
+        if exc is None and outcome == SubmitOutcome.SUBMIT_FAILED and stage in _GUARD_STAGES:
+            diag["kind"] = "guard"
+        else:
+            diag["kind"] = kind_for(exc, outcome)
+    return outcome, error
+
+
+async def _submit_one_steps(
+    page: Page,
+    row: Dict,
+    run_reason: str,
+    dry_run: bool = False,
+    speednotes_enabled: bool = False,
+    diag: Optional[Dict] = None,
 ) -> Tuple[str, Optional[str]]:
     """
     Process a single checkin row.
@@ -336,7 +481,7 @@ async def submit_one(
     outcome: one of SubmitOutcome constants
     error_message: optional details for logging
     """
-    stage = "opening the appointment dialog"
+    stage = _enter(diag, "opening the appointment dialog")
     try:
         # 1. Open Appointment modal
         # Scoped to real <button> elements with exact text: calendar cards for
@@ -350,7 +495,7 @@ async def submit_one(
         await dialog(page).wait_for(state="visible", timeout=FIELD_TIMEOUT_MS)
 
         # 2. Student search (search by full_name per PRD FR11)
-        stage = "finding the student"
+        stage = _enter(diag, "finding the student")
         student_options = await type_and_select_role(page, ROLE_NAMES["student_combobox"], row["full_name"])
         count = await student_options.count()
         if count == 0:
@@ -376,42 +521,61 @@ async def submit_one(
         # Confirmed live: the visible "When" label points at the current
         # generated input id. Following that association survives ExtJS id
         # churn while preserving direct MM/DD/YYYY entry.
-        stage = "filling the When date"
+        stage = _enter(diag, "filling the When date")
         await when_input(page).fill(to_mdy_slash(row["date"]), timeout=FIELD_TIMEOUT_MS)
         start_dt = data.parse_datetime(row["date"], row["start_time"])
         end_dt = start_dt + timedelta(minutes=row["duration_minutes"])
         end_time_12h = to_12h(end_dt.strftime("%H:%M"))
         start_time_12h = to_12h(row["start_time"])
 
-        stage = "selecting the start time"
+        stage = _enter(diag, "selecting the start time")
         start_options = await type_and_select_role(page, ROLE_NAMES["start_time_combobox"], start_time_12h)
         if await start_options.count() == 0:
             return SubmitOutcome.SUBMIT_FAILED, f"Start Time '{start_time_12h}' not found in dropdown suggestions"
         await start_options.first.click()
+        mismatch = await _confirm_value(
+            dialog(page).get_by_role("combobox", name=ROLE_NAMES["start_time_combobox"]), "Start Time", start_time_12h)
+        if mismatch:
+            diag["kind"] = "mismatch"
+            return SubmitOutcome.SUBMIT_FAILED, mismatch
 
-        stage = "selecting the end time"
+        stage = _enter(diag, "selecting the end time")
         end_options = await type_and_select_role(page, ROLE_NAMES["end_time_combobox"], end_time_12h)
         if await end_options.count() == 0:
             return SubmitOutcome.SUBMIT_FAILED, f"End Time '{end_time_12h}' not found in dropdown suggestions"
         await end_options.first.click()
+        mismatch = await _confirm_value(
+            dialog(page).get_by_role("combobox", name=ROLE_NAMES["end_time_combobox"]), "End Time", end_time_12h)
+        if mismatch:
+            diag["kind"] = "mismatch"
+            return SubmitOutcome.SUBMIT_FAILED, mismatch
 
         # 4. Where (location) — click-to-open dropdown, no typing; must select from options
-        stage = "selecting the location"
+        stage = _enter(diag, "selecting the location")
         location = row.get("effective_location", row["location"])  # fallback to original location if not set
         if not await click_and_select_role(page, ROLE_NAMES["where_combobox"], location):
             return SubmitOutcome.SUBMIT_FAILED, f"Where value '{location}' not found in dropdown options"
+        mismatch = await _confirm_value(
+            dialog(page).get_by_role("combobox", name=ROLE_NAMES["where_combobox"]), "Where", location)
+        if mismatch:
+            diag["kind"] = "mismatch"
+            return SubmitOutcome.SUBMIT_FAILED, mismatch
 
         # 5. Reason (from batch prompt) — click-to-open dropdown, no typing; must select from options
-        stage = "selecting the reason"
+        stage = _enter(diag, "selecting the reason")
         reason_box = dialog(page).get_by_role("combobox", name=ROLE_NAMES["reason_combobox"])
         await reason_box.wait_for(state="visible", timeout=FIELD_TIMEOUT_MS)
-        await _wait_until_enabled(page, reason_box, REASON_ENABLE_TIMEOUT_MS)
+        waited_from = time.monotonic()
+        try:
+            await _wait_until_enabled(page, reason_box, REASON_ENABLE_TIMEOUT_MS)
+        finally:
+            diag["reason_enable_ms"] = round((time.monotonic() - waited_from) * 1000)
         if not await click_and_select_role(page, ROLE_NAMES["reason_combobox"], run_reason):
             return SubmitOutcome.SUBMIT_FAILED, f"Reason value '{run_reason}' not found in dropdown options"
 
         # 6. Course: leave blank, never touched
         # 7. Sharing: must still be on its default (Shared), never clicked
-        stage = "checking Sharing"
+        stage = _enter(diag, "checking Sharing")
         sharing_error = await check_sharing_shared(page)
         if sharing_error:
             return SubmitOutcome.SUBMIT_FAILED, sharing_error
@@ -432,13 +596,13 @@ async def submit_one(
         # ('[role="dialog"] iframe') rather than by name. fill() does not
         # work on it (not a form control) — click to focus, then real
         # keystrokes, same pattern as the typeahead fields above.
-        stage = "filling the notes"
+        stage = _enter(diag, "filling the notes")
         await dialog(page).get_by_role("tab", name=ROLE_NAMES["outcomes_tab"]).click()
         notes_body = page.frame_locator('[role="dialog"] iframe').locator("body")
         await notes_body.click()
         await page.keyboard.type(row["notes"], delay=20)
 
-        stage = "checking the Outcomes checkboxes"
+        stage = _enter(diag, "checking the Outcomes checkboxes")
         outcome_error = await check_outcome_boxes_off(page)
         if outcome_error:
             return SubmitOutcome.SUBMIT_FAILED, outcome_error
@@ -446,20 +610,20 @@ async def submit_one(
         # 9. SpeedNotes — after Reason (changing Reason resets them), and for
         # an empty selection too, so an unexpected pre-ticked box is caught.
         if speednotes_enabled:
-            stage = "ticking SpeedNotes"
+            stage = _enter(diag, "ticking SpeedNotes")
             speednotes_error = await apply_speednotes(page, row.get("effective_speednotes") or [])
             if speednotes_error:
                 return SubmitOutcome.SUBMIT_FAILED, speednotes_error
 
         # 10. Submit or Never Mind (dry run)
         if dry_run:
-            stage = "closing the dry run"
+            stage = _enter(diag, "closing the dry run")
             closed, close_error = await dismiss_open_dialog(page)
             if not closed:
                 return SubmitOutcome.SUBMIT_FAILED, close_error
             return SubmitOutcome.SUBMITTED, None
         else:
-            stage = "submitting the appointment"
+            stage = _enter(diag, "submitting the appointment")
             await submit_button(page).click()
             # No error/success banner selector has been confirmed live (never
             # triggered a real error to observe one, by design — see PRD).
@@ -478,6 +642,7 @@ async def submit_one(
                     "have been created; verify it in Starfish before retrying.",
                 )
     except Exception as e:
+        diag["exc"] = e
         return SubmitOutcome.SUBMIT_FAILED, f"Failed while {stage}: {str(e)[:900]}"
 
 
@@ -541,15 +706,19 @@ async def run_rows(
         if on_row:
             on_row("start", idx, total, row)
 
+        diag: Dict = {}
         outcome, error = await submit_one(
-            page, row, run_reason, dry_run=dry_run, speednotes_enabled=speednotes_enabled)
+            page, row, run_reason, dry_run=dry_run, speednotes_enabled=speednotes_enabled, diag=diag)
         if outcome == SubmitOutcome.SUBMITTED:
-            submitted.append({**row, "outcome": outcome, "error": error, "reason": run_reason})
+            submitted.append({**row, "outcome": outcome, "error": error, "reason": run_reason,
+                              "diag": {"reason_enable_ms": diag.get("reason_enable_ms")}})
             if on_row:
                 on_row("success", idx, total, row)
             continue
 
         entry = {**row, "outcome": outcome, "error": error}
+        # Snapshot the form before the screenshot/dismiss change anything.
+        entry["diag"] = {**diag, **await snapshot_dialog(page)}
         entry["screenshot"] = await _capture_failure_screenshot(page, row)
         failed.append(entry)
         if on_row:

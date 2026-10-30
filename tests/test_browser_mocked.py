@@ -230,3 +230,115 @@ async def test_reason_waits_past_default_timeout_until_enabled(page, fast_timeou
     submitted, failed = await browser.run_rows(page, [row()], "Test Reason", dry_run=True)
     assert failed == []
     assert len(submitted) == 1
+
+
+async def _open_filled_dialog(page, reason_delay_ms=0):
+    await page.evaluate(f"window.mockReasonDelayMs = {reason_delay_ms}")
+    await page.get_by_role("button", name="Appointment").click()
+    await browser.when_input(page).fill("01/15/2026")
+    await page.evaluate("""() => {
+        document.getElementById('student-input').value = 'Test User';
+        document.getElementById('start-input').value = '10:00 am';
+        document.getElementById('end-input').value = '10:15 am';
+        document.getElementById('where-input').value = 'Residence Hall';
+    }""")
+
+
+@pytest.mark.asyncio
+async def test_snapshot_reads_filled_form(page):
+    await _open_filled_dialog(page, reason_delay_ms=10**7)
+    snap = await browser.snapshot_dialog(page)
+    assert snap["dialog_open"] is True
+    assert snap["student"] == "Test User"
+    assert snap["when"] == "01/15/2026"
+    assert snap["start_time"] == "10:00 am" and snap["end_time"] == "10:15 am"
+    assert snap["where"] == "Residence Hall"
+    assert snap["reason"] == ""
+    assert snap["reason_disabled"] is True
+    assert snap["reason_options"] == -1
+    assert "?" not in snap["url_path"]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_without_dialog_never_raises(page):
+    snap = await browser.snapshot_dialog(page)
+    assert snap["dialog_open"] is False
+    for key in ("student", "when", "start_time", "end_time", "where", "reason"):
+        assert snap[key] == ""
+
+
+@pytest.mark.parametrize("exc,outcome,expected", [
+    (browser.PlaywrightTimeoutError("x"), "submit_failed", "timeout"),
+    (None, "not_found", "not_found"),
+    (None, "ambiguous", "ambiguous"),
+    (None, "submit_uncertain", "uncertain"),
+    (None, "not_attempted", "not_attempted"),
+    (ValueError("Jane Doe"), "submit_failed", "ValueError"),
+    (type("Weird-Name", (Exception,), {})(), "submit_failed", "other"),
+    (None, "submit_failed", "other"),
+])
+def test_kind_for_maps_outcomes_and_exceptions(exc, outcome, expected):
+    assert browser.kind_for(exc, outcome) == expected
+
+
+@pytest.mark.asyncio
+async def test_reason_never_unlocks_diag(page, fast_timeouts, monkeypatch):
+    monkeypatch.setattr(browser, "REASON_ENABLE_TIMEOUT_MS", 500)
+    await page.evaluate("window.mockReasonDelayMs = 10000000")
+    submitted, failed = await browser.run_rows(page, [row()], "Test Reason", dry_run=True)
+    assert submitted == []
+    diag = failed[0]["diag"]
+    assert diag["stage"] == "reason" and diag["kind"] == "timeout"
+    assert diag["reason_disabled"] is True
+    assert diag["where"] == "Residence Hall"
+    assert diag["student"] and diag["when"] == "01/15/2026"
+    assert diag["waited_ms"] >= 500 and diag["elapsed_ms"] >= diag["waited_ms"]
+
+
+@pytest.mark.asyncio
+async def test_readback_mismatch_fails_at_where(page, fast_timeouts):
+    await page.evaluate("window.mockWhereIgnoresClick = true")
+    submitted, failed = await browser.run_rows(page, [row()], "Test Reason", dry_run=True)
+    assert failed[0]["outcome"] == browser.SubmitOutcome.SUBMIT_FAILED
+    assert "Where shows" in failed[0]["error"]
+    assert failed[0]["diag"]["stage"] == "where" and failed[0]["diag"]["kind"] == "mismatch"
+
+
+@pytest.mark.asyncio
+async def test_readback_is_case_and_space_insensitive(page):
+    await _open_filled_dialog(page)
+    await page.evaluate("document.getElementById('start-input').value = ' 10:00 AM '")
+    box = browser.dialog(page).get_by_role("combobox", name="Start Time")
+    assert await browser._confirm_value(box, "Start Time", "10:00 am") is None
+    assert "Start Time shows" in await browser._confirm_value(box, "Start Time", "11:00 am")
+
+
+@pytest.mark.asyncio
+async def test_success_records_reason_enable_ms(page, fast_timeouts):
+    # Typing Student/times takes seconds, so a short mock lock has already
+    # expired by the time Reason is reached; only check the timing is recorded.
+    submitted, failed = await browser.run_rows(page, [row()], "Test Reason", dry_run=True)
+    assert failed == []
+    assert isinstance(submitted[0]["diag"]["reason_enable_ms"], int)
+    assert submitted[0]["diag"]["reason_enable_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_readback_unreadable_field_does_not_fail(page):
+    """If the combobox role sits on a non-input element, input_value() throws:
+    read-back can't verify, so it must let the row continue, not call it a mismatch."""
+    await _open_filled_dialog(page)
+    not_an_input = browser.dialog(page).get_by_role("tab", name="Outcomes")
+    assert await browser._confirm_value(not_an_input, "Start Time", "10:00 am") is None
+
+
+@pytest.mark.asyncio
+async def test_readback_waits_for_late_update(page):
+    await _open_filled_dialog(page)
+    await page.evaluate("""() => {
+        const box = document.getElementById('start-input');
+        box.value = '';
+        setTimeout(() => { box.value = '10:00 am'; }, 600);
+    }""")
+    box = browser.dialog(page).get_by_role("combobox", name="Start Time")
+    assert await browser._confirm_value(box, "Start Time", "10:00 am") is None

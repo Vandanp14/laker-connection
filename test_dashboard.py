@@ -658,6 +658,10 @@ class FakeAnalytics:
     def track(self, event, **counts):
         self.calls.append((event, counts))
 
+    def track_batch(self, events):
+        for event, fields in events:
+            self.track(event, **fields)
+
 
 def _outcome_rows(rows, outcomes):
     template = rows[0]
@@ -674,9 +678,11 @@ def test_real_submit_tracked_with_counts(sn_dashboard, monkeypatch):
                 _outcome_rows(rows, [O.NOT_FOUND, O.AMBIGUOUS, O.SUBMIT_FAILED,
                                      O.SUBMIT_UNCERTAIN, O.NOT_ATTEMPTED]))
     monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
-    _post({'speednotes': ['Room Selection'], 'dry_run': ''})
-    assert len(fake.calls) == 1
-    event, counts = fake.calls[0]
+    response = _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    assert response.status_code == 200
+    submits = [c for c in fake.calls if c[0] == 'submit']
+    assert len(submits) == 1
+    event, counts = submits[0]
     seconds = counts.pop('seconds')
     assert event == 'submit' and isinstance(seconds, int) and seconds >= 0
     assert counts == {'submitted': 2, 'failed': 3, 'uncertain': 1, 'skipped': 1, 'crashed': 0}
@@ -786,3 +792,88 @@ def test_mandatory_fields_marked_required(isolated_dashboard):
     assert '<select name="location" id="bulk_location" required>' in body
     assert '<select name="reason" id="reason" required>' in body
     assert 'class="req"' in body
+
+
+class FakeErrorAnalytics(FakeAnalytics):
+    @staticmethod
+    def error_fields(diag):
+        return {"stage": diag.get("stage")}
+
+
+def _diag_rows(rows, n, outcome, stage="reason"):
+    return [{**rows[0], 'outcome': outcome, 'error': 'x',
+             'diag': {'stage': stage, 'kind': 'timeout', 'reason_disabled': True}} for _ in range(n)]
+
+
+def test_failed_rows_send_error_events(sn_dashboard, monkeypatch):
+    fake = FakeErrorAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+    O = dashboard.browser.SubmitOutcome
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [], _diag_rows(rows, 2, O.SUBMIT_FAILED) + _diag_rows(rows, 1, O.NOT_ATTEMPTED, 'other')
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    errors = [c for c in fake.calls if c[0] == 'error']
+    assert errors == [('error', {'stage': 'reason'})] * 2
+    assert [c[0] for c in fake.calls].count('submit') == 1
+
+
+def test_error_events_capped_at_10(sn_dashboard, monkeypatch):
+    fake = FakeErrorAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [], _diag_rows(rows, 30, dashboard.browser.SubmitOutcome.SUBMIT_FAILED)
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    _post({'speednotes': ['Room Selection'], 'dry_run': ''})
+    assert [c[0] for c in fake.calls].count('error') == 10
+
+
+def test_dry_run_sends_no_error_events(sn_dashboard, monkeypatch):
+    fake = FakeErrorAnalytics()
+    monkeypatch.setattr(dashboard, 'analytics', fake)
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [], _diag_rows(rows, 2, dashboard.browser.SubmitOutcome.SUBMIT_FAILED)
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    _post({'speednotes': ['Room Selection']})
+    assert fake.calls == []
+
+
+def test_failure_diag_logged_locally(sn_dashboard, monkeypatch, caplog):
+    monkeypatch.setattr(dashboard, 'analytics', None, raising=False)
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [], _diag_rows(rows, 1, dashboard.browser.SubmitOutcome.SUBMIT_FAILED)
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    with caplog.at_level('INFO', logger='laker'):
+        _post({'speednotes': ['Room Selection']})
+    text = "\n".join(r.getMessage() for r in caplog.records if r.name == 'laker')
+    assert "'stage': 'reason'" in text and "'reason_disabled': True" in text
+
+
+def test_success_logs_reason_enable_ms(sn_dashboard, monkeypatch, caplog):
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [{**r, 'outcome': dashboard.browser.SubmitOutcome.SUBMITTED, 'error': None,
+                 'diag': {'reason_enable_ms': 4321}} for r in rows], []
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    with caplog.at_level('INFO', logger='laker'):
+        _post({'speednotes': ['Room Selection']})
+    assert any('reason unlocked in 4321 ms' in r.getMessage() for r in caplog.records)
+
+
+def test_submit_and_errors_sent_as_one_ordered_batch(sn_dashboard, monkeypatch):
+    batches = []
+
+    class BatchAnalytics(FakeErrorAnalytics):
+        def track_batch(self, events):
+            batches.append([e for e, _ in events])
+
+    monkeypatch.setattr(dashboard, 'analytics', BatchAnalytics())
+
+    async def fake_run(rows, reason, config, dry_run=False):
+        return [], _diag_rows(rows, 2, dashboard.browser.SubmitOutcome.SUBMIT_FAILED)
+    monkeypatch.setattr(dashboard.browser, 'run_submission', fake_run)
+    assert _post({'speednotes': ['Room Selection'], 'dry_run': ''}).status_code == 200
+    assert batches == [['submit', 'error', 'error']]

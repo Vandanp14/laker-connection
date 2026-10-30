@@ -94,6 +94,7 @@
             window.mockPreTick = null;       // label of a SpeedNote shown pre-ticked on the SpeedNotes tab
             window.mockSendCopy = false;     // open with "Send a copy of note to student" ticked
             window.mockReasonDelayMs = 0;    // live: Reason starts disabled and unlocks later
+            window.mockWhereIgnoresClick = false; // a Where pick that doesn't take
 
             function resetSpeedNotes() {
                 document.querySelectorAll('#speednotes-panel input').forEach(function (box) {
@@ -183,7 +184,7 @@
             document.getElementById('where-input').addEventListener('click', function (event) {
                 clearOptions();
                 ['Residence Hall', 'In- Residence Halls', 'Out of Residence Halls'].forEach(function (value) {
-                    addOption(value, function () { event.target.value = value; });
+                    addOption(value, function () { if (!window.mockWhereIgnoresClick) event.target.value = value; });
                 });
             });
 

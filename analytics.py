@@ -13,6 +13,7 @@ folder or the folder above it, or when ENDPOINT is empty.
 """
 import json
 import os
+import re
 import ssl
 import threading
 import urllib.request
@@ -24,6 +25,15 @@ ENDPOINT = "https://script.google.com/macros/s/AKfycbwWZG4R7T4-6xPvYKZ1qpsZBCEEQ
 TOKEN = "lc1"
 TIMEOUT_SECONDS = 3
 SUBMIT_FIELDS = ("submitted", "failed", "uncertain", "skipped", "crashed", "seconds")
+ERROR_STAGES = ("dialog", "student", "when", "start_time", "end_time", "where", "reason",
+                "sharing", "notes", "outcomes", "speednotes", "close_dry_run", "submit", "other")
+ERROR_KINDS = ("timeout", "not_found", "ambiguous", "mismatch", "guard", "uncertain",
+               "not_attempted", "other")
+ERROR_FIELDS = ("stage", "kind", "student", "when", "start", "end", "where", "reason_locked",
+                "reason_options", "waited_ms", "elapsed_ms")
+# Exception class names are allowed as a kind (e.g. TimeoutError), but only
+# ones shaped like an error class — never anything that could be a name.
+_ERROR_CLASS = re.compile(r"^[A-Za-z_]{0,30}(Error|Exception)$")
 
 _session_id = None
 
@@ -69,11 +79,61 @@ def _version() -> str:
         return "dev"
 
 
+def _clamp(value, low, high, default):
+    try:
+        return max(low, min(high, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def error_fields(diag: dict) -> dict:
+    """The only things a failed row reports: fixed labels, 0/1 'field had a
+    value' flags and clamped numbers. Field values themselves never leave."""
+    stage = diag.get("stage")
+    kind = diag.get("kind")
+    disabled = diag.get("reason_disabled")
+    return {
+        "stage": stage if stage in ERROR_STAGES else "other",
+        "kind": kind if kind in ERROR_KINDS or (isinstance(kind, str) and _ERROR_CLASS.match(kind))
+                else "other",
+        "student": int(bool(diag.get("student"))),
+        "when": int(bool(diag.get("when"))),
+        "start": int(bool(diag.get("start_time"))),
+        "end": int(bool(diag.get("end_time"))),
+        "where": int(bool(diag.get("where"))),
+        "reason_locked": 2 if disabled is None else int(bool(disabled)),
+        "reason_options": _clamp(diag.get("reason_options"), -1, 200, -1),
+        "waited_ms": _clamp(diag.get("waited_ms"), 0, 600000, 0),
+        "elapsed_ms": _clamp(diag.get("elapsed_ms"), 0, 600000, 0),
+    }
+
+
 def payload(event: str, **counts) -> dict:
     body = {"token": TOKEN, "event": event, "install_id": install_id()[0], "version": _version()}
     if event == "submit":
         body.update({key: int(counts.get(key, 0)) for key in SUBMIT_FIELDS})
+    elif event == "error":
+        body.update(error_fields_passthrough(counts))
     return body
+
+
+# (low, high, default) for each numeric error field.
+_ERROR_BOUNDS = {"student": (0, 1, 0), "when": (0, 1, 0), "start": (0, 1, 0), "end": (0, 1, 0),
+                 "where": (0, 1, 0), "reason_locked": (0, 2, 2), "reason_options": (-1, 200, -1),
+                 "waited_ms": (0, 600000, 0), "elapsed_ms": (0, 600000, 0)}
+
+
+def error_fields_passthrough(fields: dict) -> dict:
+    """Re-check already-built error fields so payload() alone can't send text."""
+    stage, kind = fields.get("stage"), fields.get("kind")
+    checked = {
+        "stage": stage if stage in ERROR_STAGES else "other",
+        "kind": kind if kind in ERROR_KINDS or (isinstance(kind, str) and _ERROR_CLASS.match(kind))
+                else "other",
+    }
+    for key, (low, high, default) in _ERROR_BOUNDS.items():
+        checked[key] = _clamp(fields.get(key), low, high, default)
+    return checked
 
 
 MACOS_CA_BUNDLE = "/etc/ssl/cert.pem"
@@ -117,6 +177,17 @@ def track(event: str, **counts):
         if not enabled():
             return None
         return _start([payload(event, **counts)])
+    except Exception:
+        return None
+
+
+def track_batch(events):
+    """Send several events in order on one thread: [(event, fields), ...].
+    One request at a time keeps the endpoint's lock from timing some out."""
+    try:
+        if not enabled():
+            return None
+        return _start([payload(event, **fields) for event, fields in events])
     except Exception:
         return None
 

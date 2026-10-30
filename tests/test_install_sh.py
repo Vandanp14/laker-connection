@@ -29,6 +29,13 @@ def _make_tarball(tmp_path, dashboard_body="print('v1')\n"):
     return tarball
 
 
+def _free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 @pytest.fixture
 def env(tmp_path):
     home = tmp_path / "Home With Space"
@@ -42,6 +49,9 @@ def env(tmp_path):
         "LAKER_SKIP_DEPS": "1",
         "LAKER_SKIP_CHROME_CHECK": "1",
         "LAKER_NO_LAUNCH": "1",
+        # A free port, so a real dashboard running on 5050 doesn't make the
+        # installer exit early with "already running".
+        "LAKER_PORT": str(_free_port()),
     }
 
 

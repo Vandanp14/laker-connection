@@ -705,23 +705,39 @@ def submit_batch():
                                 skipped=len(rows_to_submit), crashed=1,
                                 seconds=round(time.monotonic() - started))
             return _error_page(f"Submission error: {e}", status=500)
-        if analytics and not dry_run:
-            O = browser.SubmitOutcome
-            outcomes = [f['outcome'] for f in failed]
-            analytics.track('submit', submitted=len(submitted),
-                            failed=sum(o in (O.NOT_FOUND, O.AMBIGUOUS, O.SUBMIT_FAILED)
-                                       for o in outcomes),
-                            uncertain=outcomes.count(O.SUBMIT_UNCERTAIN),
-                            skipped=outcomes.count(O.NOT_ATTEMPTED),
-                            crashed=0, seconds=round(time.monotonic() - started))
+        O = browser.SubmitOutcome
+        outcomes = [f['outcome'] for f in failed]
+        submit_counts = dict(
+            submitted=len(submitted),
+            failed=sum(o in (O.NOT_FOUND, O.AMBIGUOUS, O.SUBMIT_FAILED) for o in outcomes),
+            uncertain=outcomes.count(O.SUBMIT_UNCERTAIN),
+            skipped=outcomes.count(O.NOT_ATTEMPTED),
+            crashed=0, seconds=round(time.monotonic() - started))
 
         log.info("%s: %d row(s), reason %r", 'dry run' if dry_run else 'real submit',
                  len(rows_to_submit), run_reason)
         for r in submitted:
-            log.info("  SUBMITTED %s %s %s", r['email_or_id'], r['date'], r['start_time'])
+            log.info("  SUBMITTED %s %s %s (reason unlocked in %s ms)", r['email_or_id'], r['date'],
+                     r['start_time'], r.get('diag', {}).get('reason_enable_ms'))
         for f in failed:
             log.warning("  %s %s %s %s: %s", f['outcome'], f['email_or_id'], f['date'],
                         f['start_time'], f.get('error'))
+            if f.get('diag'):
+                log.warning("    diag: %s", f['diag'])
+        if analytics and not dry_run:
+            # One ordered batch: the submit counts, then up to 10 anonymous
+            # error events (labels/flags/numbers only, see analytics.error_fields).
+            events = [('submit', submit_counts)]
+            try:
+                reportable = [f for f in failed if f['outcome'] != O.NOT_ATTEMPTED]
+                for f in reportable[:10]:
+                    events.append(('error', analytics.error_fields(f.get('diag', {}))))
+            except Exception:
+                pass  # a bad diag must not cost the submit count
+            try:
+                analytics.track_batch(events)
+            except Exception:
+                pass  # analytics must never break the results page
 
         # For success, append to submission_log (only if not dry run)
         if not dry_run:
